@@ -1,4 +1,4 @@
 # Spectre Divide Colorbot
-currently have filtering working 
-aimbot isnt working 
-want to add triggerbot and no recoil
+# Currently have filtering working 
+# Aimbot isnt working 
+# Want to add triggerbot and no recoil
