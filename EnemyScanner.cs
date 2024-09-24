@@ -10,8 +10,10 @@ namespace SCB
             if ( IsEnemyVisible( ref image, ref middle, out enemyOuterPoints ) )
             {
                 targetPosition = GetAimLocation( ref enemyOuterPoints, ref aimLocation );
+            } else
+            {
+                targetPosition = new Point( -1, -1 );
             }
-            targetPosition = new Point( -1, -1 );
         }
 
 
