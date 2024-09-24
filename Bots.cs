@@ -1,4 +1,6 @@
-﻿namespace SCB
+﻿using static SCB.EnemyScanner;
+
+namespace SCB
 {
 
 
@@ -9,15 +11,16 @@
     {
         private bool disposed = false;
         private readonly object locker = new object();
-        public int aimSpeed = 1;
-        public int aimDelay = 1;
-        public int aimKey = 0x01;
+        private int aimSpeed = 1;
+        private int aimDelay = 1;
+        private int aimKey = 0x01;
         private PInvoke.RECT gameRect;
+        private Point centerOfGameWindow;
+        private AimLocation aimLocation;
 
 
         private readonly CancellationTokenSource cancellation = new CancellationTokenSource();
         private Thread aimBotThread;
-        private ScreenCap screenCap;
         public Logger logger;
 
 
@@ -42,36 +45,30 @@
         /// <param name="targetPos"></param>
         private void AimAtTarget( Point targetPos )
         {
-            Point centerOfGameWindow = new Point
+            targetPos.X -= this.centerOfGameWindow.X;
+            targetPos.Y -= this.centerOfGameWindow.Y;
+
+            int distance = ( int ) Math.Sqrt( Math.Pow( targetPos.X, 2 ) + Math.Pow( targetPos.Y, 2 ) );
+            if ( distance == 0 )
             {
-                X = this.gameRect.left + ( this.gameRect.right - this.gameRect.left ) / 2,
-                Y = this.gameRect.top + ( this.gameRect.bottom - this.gameRect.top ) / 2
-            };
+                return;
+            }
 
-            int deltaX = targetPos.X - centerOfGameWindow.X;
-            int deltaY = targetPos.Y - centerOfGameWindow.Y;
+            int szSteps = Math.Max( 1, distance / 10 ) * this.aimSpeed;
+            int stepCount = ( distance / szSteps ) + 1;
 
-            SmoothAim( new Point { X = deltaX, Y = deltaY } );
-        }
+            double stepX = ( double ) targetPos.X / stepCount;
+            double stepY = ( double ) targetPos.Y / stepCount;
 
-
-        /// <summary>
-        /// smooth aim function, uses the aimSpeed to calculate the steps needed to reach the target
-        /// </summary>
-        /// <param name="distance"></param>
-        private void SmoothAim( Point distance )
-        {
-            //smooth aim based on aim speed
-            int steps = this.aimSpeed;
-            int stepX = distance.X / steps;
-            int stepY = distance.Y / steps;
-
-            for ( int i = 0; i < steps; i++ )
+            for ( int i = 0; i < stepCount; i++ )
             {
-                MouseInput.MoveRelativeMouse( stepX, stepY );
+                int x = this.centerOfGameWindow.X + ( int ) ( stepX * i );
+                int y = this.centerOfGameWindow.Y + ( int ) ( stepY * i );
+
+                MouseInput.MoveAbsoluteMouse( x, y );
+                Thread.Sleep( ( int ) 0.01 / this.aimSpeed );
             }
         }
-
 
 
         /// <summary>
@@ -79,17 +76,29 @@
         /// </summary>
         public void StartAimBot()
         {
-            Point targetPos;
             while ( !this.cancellation.Token.IsCancellationRequested )
             {
+                Bitmap? screenCap = null;
+                Task captureAndFilter = Task.Run( () => ScreenCap.CaptureAndFilter( out Bitmap screenCap ) );
+                captureAndFilter.Wait();
+
+                if ( screenCap == null )
+                {
+                    continue;
+                }
+
+                Point targetPos = new Point();
+                Task findEnemy = Task.Run( () => EnemyScanner.ScanForEnemy( ref screenCap, ref this.centerOfGameWindow, this.aimLocation, out targetPos ) );
+                findEnemy.Wait();
+
+                if ( targetPos.X == -1 && targetPos.Y == -1 )
+                {
+                    continue;
+                }
 
                 if ( this.IsAiming() )
                 {
-                    targetPos = this.screenCap.targetPos.GetPosStack();
-                    if ( targetPos.X < 1 && targetPos.Y < 1 )
-                    {
-                        continue;
-                    }
+
 #if DEBUG
                     //this swamps the loggers output, only for emergency debugging
                     //logger.Log( "Aimbot Target at: " + targetPos.X + ", " + targetPos.Y );
@@ -102,18 +111,22 @@
         }
 
 
-
         /// <summary>
         /// main entry point for the aimbot
         /// </summary>
         /// <param name="logger"></param>
         /// <param name="screenCap"></param>
 #if DEBUG
-        public void Start( ref Logger logger, ref ScreenCap screenCap, PInvoke.RECT rect )
+        public void Start( ref Logger logger, PInvoke.RECT rect )
         {
             this.logger = logger;
-            this.screenCap = screenCap;
             this.gameRect = rect;
+
+            this.centerOfGameWindow = new Point
+            {
+                X = this.gameRect.left + ( this.gameRect.right - this.gameRect.left ) / 2,
+                Y = this.gameRect.top + ( this.gameRect.bottom - this.gameRect.top ) / 2
+            };
 
             logger.Log( "Settings: " );
             logger.Log( "Aim Speed: " + this.aimSpeed );
@@ -127,9 +140,9 @@
             logger.Log( "Aimbot started" );
         }
 #else
-        public void Start( ref ScreenCap screenCap, PInvoke.RECT rect )
+        public void Start( PInvoke.RECT rect )
         {
-            this.screenCap = screenCap;
+
             this.gameRect = rect;
 
             this.aimBotThread = new Thread( StartAimBot );
@@ -211,6 +224,22 @@
             }
         }
 
+        public void SetAimLocation( ref AimLocation aimLocation )
+        {
+            lock ( locker )
+            {
+                this.aimLocation = aimLocation;
+            }
+        }
+
+        public AimLocation GetAimLocation()
+        {
+            lock ( locker )
+            {
+                return this.aimLocation;
+            }
+        }
+
 
         /// <summary>
         /// stops the aimbot
@@ -219,7 +248,6 @@
         {
             this.cancellation.Cancel();
             this.aimBotThread.Join();
-            this.screenCap.Stop();
 
 #if DEBUG
             logger.Log( "Aimbot stopped" );
@@ -249,6 +277,10 @@
             disposed = true;
         }
     }
+
+
+
+
 }
 
 

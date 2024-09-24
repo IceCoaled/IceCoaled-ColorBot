@@ -1,4 +1,5 @@
 using Gma.System.MouseKeyHook;
+using static SCB.EnemyScanner;
 
 namespace SCB
 {
@@ -7,7 +8,6 @@ namespace SCB
     {
 
         private AimBot aimBot = new AimBot();
-        private ScreenCap screenCap;
         private NotifyIcon trayIcon;
         private Logger logger;
         Thread isGameActive;
@@ -65,6 +65,8 @@ namespace SCB
             this.comboBox2 = new ComboBox();
             this.label5 = new Label();
             this.trackBar3 = new TrackBar();
+            this.label6 = new Label();
+            this.comboBox3 = new ComboBox();
             ( ( System.ComponentModel.ISupportInitialize ) this.trackBar1 ).BeginInit();
             ( ( System.ComponentModel.ISupportInitialize ) this.trackBar2 ).BeginInit();
             ( ( System.ComponentModel.ISupportInitialize ) this.trackBar3 ).BeginInit();
@@ -179,7 +181,7 @@ namespace SCB
             this.label4.AutoSize = true;
             this.label4.Font = new Font( "Constantia", 12F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
             this.label4.ForeColor = Color.MediumSlateBlue;
-            this.label4.Location = new Point( 384, 232 );
+            this.label4.Location = new Point( 384, 202 );
             this.label4.Name = "label4";
             this.label4.Size = new Size( 123, 19 );
             this.label4.TabIndex = 17;
@@ -189,7 +191,7 @@ namespace SCB
             // 
             this.comboBox2.FormattingEnabled = true;
             this.comboBox2.Items.AddRange( new object[] { "orange", "red", "green", "yellow", "purple", "cyan" } );
-            this.comboBox2.Location = new Point( 375, 254 );
+            this.comboBox2.Location = new Point( 375, 232 );
             this.comboBox2.Name = "comboBox2";
             this.comboBox2.Size = new Size( 144, 23 );
             this.comboBox2.TabIndex = 18;
@@ -216,12 +218,35 @@ namespace SCB
             this.trackBar3.TickStyle = TickStyle.TopLeft;
             this.trackBar3.Scroll += this.trackBar3_Scroll;
             // 
+            // label6
+            // 
+            this.label6.AutoSize = true;
+            this.label6.Font = new Font( "Constantia", 12F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
+            this.label6.ForeColor = Color.MediumSlateBlue;
+            this.label6.Location = new Point( 384, 270 );
+            this.label6.Name = "label6";
+            this.label6.Size = new Size( 110, 19 );
+            this.label6.TabIndex = 21;
+            this.label6.Text = "Aim Location";
+            // 
+            // comboBox3
+            // 
+            this.comboBox3.FormattingEnabled = true;
+            this.comboBox3.Items.AddRange( new object[] { "head", "body" } );
+            this.comboBox3.Location = new Point( 375, 303 );
+            this.comboBox3.Name = "comboBox3";
+            this.comboBox3.Size = new Size( 144, 23 );
+            this.comboBox3.TabIndex = 22;
+            this.comboBox3.SelectedIndexChanged += this.comboBox3_SelectedIndexChanged;
+            // 
             // IceColorBot
             // 
             this.BackColor = Color.MidnightBlue;
             this.BackgroundImage = ( Image ) resources.GetObject( "$this.BackgroundImage" );
             this.BackgroundImageLayout = ImageLayout.Center;
             this.ClientSize = new Size( 563, 544 );
+            this.Controls.Add( this.comboBox3 );
+            this.Controls.Add( this.label6 );
             this.Controls.Add( this.trackBar3 );
             this.Controls.Add( this.label5 );
             this.Controls.Add( this.comboBox2 );
@@ -252,37 +277,27 @@ namespace SCB
         {
 
             var rad = ( trackBar1.Value * 280 );
-            PlayerData.SetAimRad( ref rad, ref screenCap );
+            PlayerData.SetAimRad( ref rad );
 
 #if DEBUG
-            logger.Log( "Aim Radius: " + PlayerData.GetAimRad() );
+            logger.Log( "Aim Radius Switched To: " + PlayerData.GetAimRad() );
 #endif
         }
 
 
         private void button1_Click( object sender, EventArgs e )
         {
-#if DEBUG
-            screenCap = new ScreenCap( PlayerData.GetHwnd(), PlayerData.GetRect(),
-                ref logger, PlayerData.GetAimRad(), colortolerances.GetColorTolerance() );
-#else
-            screenCap = new ScreenCap( PlayerData.GetHwnd(), PlayerData.GetRect(),
-                PlayerData.GetAimRad(), colortolerances.GetColorTolerance() );
-#endif
-
-            screenCap.Start();
 
 #if DEBUG
-            aimBot.Start( ref logger, ref screenCap, PlayerData.GetRect() );
+            aimBot.Start( ref logger, PlayerData.GetRect() );
 #else
-            aimBot.Start( ref screenCap, PlayerData.GetRect() );
+            aimBot.Start( PlayerData.GetRect() );
 #endif
         }
 
         private void button2_Click( object sender, EventArgs e )
         {
             aimBot.Stop();
-            screenCap.Stop();
         }
 
         private void comboBox1_SelectedIndexChanged( object sender, EventArgs e )
@@ -324,7 +339,7 @@ namespace SCB
             }
 
 #if DEBUG
-            logger.Log( "Aim Key: " + aimBot.aimKey );
+            logger.Log( "Aim Key Switched To: " + PlayerData.GetAimKey() );
 #endif
         }
 
@@ -334,7 +349,6 @@ namespace SCB
             trayIcon.Visible = false;
 
             aimBot.Dispose();
-            screenCap.Dispose();
             logger.Dispose();
             colortolerances.Dispose();
             activeGameCancellation.Cancel();
@@ -373,13 +387,13 @@ namespace SCB
             var aimSpeed = trackBar2.Value * 10;
             PlayerData.SetAimSpeed( ref aimSpeed, ref aimBot );
 #if DEBUG
-            logger.Log( "Aim Speed: " + aimSpeed );
+            logger.Log( "Aim Speed Switched To: " + aimSpeed );
 #endif
         }
 
         private void GameCheck()
         {
-            nint firstHwnd = nint.Zero;
+            nint firstHwnd;
             while ( !activeGameCancellation.Token.IsCancellationRequested )
             {
                 firstHwnd = WinApi.FindWindow();
@@ -390,7 +404,7 @@ namespace SCB
                 }
                 if ( firstHwnd != nint.MaxValue )
                 {
-                    PlayerData.SetHwnd( ref firstHwnd, ref screenCap );
+                    PlayerData.SetHwnd( ref firstHwnd );
 
                     if ( !WinApi.GetWindowRect( PlayerData.GetHwnd(), ref PlayerData.RefRect() ) )
                     {
@@ -405,9 +419,8 @@ namespace SCB
                 if ( firstHwnd == nint.MaxValue && PlayerData.GetHwnd() != nint.MaxValue )
                 {
 
-                    PlayerData.SetHwnd( ref firstHwnd, ref screenCap );
+                    PlayerData.SetHwnd( ref firstHwnd );
                     aimBot.Dispose();
-                    screenCap.Dispose();
 #if DEBUG
                     logger.Log( "Game is not active" );
 #endif
@@ -454,10 +467,10 @@ namespace SCB
             }
 
             var color = colortolerances.GetColorTolerance();
-            PlayerData.SetColorRange( ref color, ref screenCap );
+            PlayerData.SetColorRange( ref color );
 
 #if DEBUG
-            logger.Log( "Color Selection: " + colortolerances.GetColorName( PlayerData.GetColorRange() ) );
+            logger.Log( "Color Selection Switched To: " + colortolerances.GetColorName( PlayerData.GetColorRange() ) );
 #endif
         }
 
@@ -467,7 +480,7 @@ namespace SCB
             PlayerData.SetAimDelay( ref aimDelay, ref aimBot );
 
 #if DEBUG
-            logger.Log( "Aim Delay: " + PlayerData.GetAimDelay() );
+            logger.Log( "Aim Delay Switched To: " + PlayerData.GetAimDelay() );
 #endif
         }
 
@@ -508,11 +521,6 @@ namespace SCB
                 aimBot.Dispose();
             }
 
-            if ( screenCap != null )
-            {
-                screenCap.Dispose();
-            }
-
             if ( logger != null )
             {
                 logger.Dispose();
@@ -527,12 +535,38 @@ namespace SCB
                 isGameActive.IsAlive )
             {
                 activeGameCancellation.Cancel();
-                activeGameCancellation.Dispose();
                 isGameActive.Join();
+                activeGameCancellation.Dispose();
             }
 
             UnsubToHotKey();
             base.OnFormClosed( e );
+        }
+
+
+
+        private void comboBox3_SelectedIndexChanged( object sender, EventArgs e )
+        {
+            switch ( comboBox3.SelectedIndex )
+            {
+                default:
+                case 0:
+                {
+                    var aimLocation = AimLocation.head;
+                    PlayerData.SetAimLocation( ref aimLocation, ref aimBot );
+                }
+                break;
+                case 1:
+                {
+                    var aimLocation = AimLocation.body;
+                    PlayerData.SetAimLocation( ref aimLocation, ref aimBot );
+                }
+                break;
+            }
+
+#if DEBUG
+            logger.Log( "Aim Location Switched To: " + PlayerData.GetAimLocation() );
+#endif
         }
     }
 
@@ -551,6 +585,7 @@ namespace SCB
         private static nint localHWnd = nint.MaxValue;
         private static PInvoke.RECT localRect = new();
         private static List<IEnumerable<int>> localColorRange = new List<IEnumerable<int>>();
+        private static AimLocation aimLocation;
 
 
         public static void SetAimDelay( ref int aimDelay, ref AimBot aimBot )
@@ -599,16 +634,12 @@ namespace SCB
         }
 
 
-        public static void SetAimRad( ref int aimRad, ref ScreenCap screenCap )
+        public static void SetAimRad( ref int aimRad )
         {
             lock ( locker )
             {
                 localAimRad = aimRad;
-                if ( screenCap != null &&
-                    screenCap.GetScanRadius() != localAimRad )
-                {
-                    screenCap.SetScanRadius( ref aimRad );
-                }
+                ScreenCap.SetScanRadius( ref aimRad );
             }
         }
 
@@ -643,16 +674,12 @@ namespace SCB
             }
         }
 
-        public static void SetHwnd( ref nint hWnd, ref ScreenCap screenCap )
+        public static void SetHwnd( ref nint hWnd )
         {
             lock ( locker )
             {
                 localHWnd = hWnd;
-                if ( screenCap != null &&
-                    screenCap.GetHwnd() != localHWnd )
-                {
-                    screenCap.SetHwnd( ref hWnd );
-                }
+                ScreenCap.SetHwnd( ref hWnd );
             }
         }
 
@@ -665,19 +692,18 @@ namespace SCB
         }
 
 
-        public static void SetRect( ref PInvoke.RECT rect, ref ScreenCap screenCap, ref AimBot aimBot )
+        public static void SetRect( ref PInvoke.RECT rect, ref AimBot aimBot )
         {
             lock ( locker )
             {
                 localRect = rect;
-                var currentRect = screenCap.GetRect();
-                if ( screenCap != null &&
-                    currentRect.left != rect.left ||
+                var currentRect = ScreenCap.GetRect();
+                if ( currentRect.left != rect.left ||
                     currentRect.right != rect.right ||
                     currentRect.top != rect.top ||
                     currentRect.bottom != rect.bottom )
                 {
-                    screenCap.SetRect( ref rect );
+                    ScreenCap.SetRect( ref rect );
 
                     if ( aimBot != null )
                     {
@@ -703,16 +729,15 @@ namespace SCB
             }
         }
 
-        public static void SetColorRange( ref List<IEnumerable<int>> colorRange, ref ScreenCap screenCap )
+        public static void SetColorRange( ref List<IEnumerable<int>> colorRange )
         {
             lock ( locker )
             {
                 localColorRange = colorRange;
 
-                if ( screenCap != null &&
-                    screenCap.GetColorRange() != localColorRange )
+                if ( ScreenCap.GetColorRange() != localColorRange )
                 {
-                    screenCap.SetColorRange( ref colorRange );
+                    ScreenCap.SetColorRange( ref colorRange );
                 }
             }
         }
@@ -722,6 +747,27 @@ namespace SCB
             lock ( locker )
             {
                 return localColorRange;
+            }
+        }
+
+        public static void SetAimLocation( ref AimLocation aimLocation, ref AimBot aimBot )
+        {
+            lock ( locker )
+            {
+                PlayerData.aimLocation = aimLocation;
+                if ( aimBot != null &&
+                    aimLocation != aimBot.GetAimLocation() )
+                {
+                    aimBot.SetAimLocation( ref aimLocation );
+                }
+            }
+        }
+
+        public static AimLocation GetAimLocation()
+        {
+            lock ( locker )
+            {
+                return aimLocation;
             }
         }
     }

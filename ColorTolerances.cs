@@ -19,7 +19,7 @@
         private Dictionary<string, List<IEnumerable<int>>> colorDictonary;
 
         private List<IEnumerable<int>> selected;
-        private Mutex selectedMutex;
+        private readonly Mutex selectedMutex;
 
 #if DEBUG
         public ColorTolerances( ref Logger logger )

@@ -33,5 +33,7 @@
         private ComboBox comboBox2;
         private Label label5;
         private TrackBar trackBar3;
+        private Label label6;
+        private ComboBox comboBox3;
     }
 }
