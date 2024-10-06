@@ -1,241 +1,163 @@
 ﻿#if DEBUG
-#define PRINT
+//#define PRINT
 #endif
-
+using System.Drawing.Imaging;
+using Utils;
 
 namespace SCB
 {
-
     /// <summary>
-    /// class to handle the screen capture and filtering
+    /// Class to handle screen capturing and image filtering.
     /// </summary>
-    public static class ScreenCap
+    internal static class ScreenCap
     {
-        private static nint hWnd;
-        private static ThreadSafeGraphics tsGraphics;
-        private static PInvoke.RECT rect;
-        private static int scanRadius;
-        private static Logger logger;
-        private static List<IEnumerable<int>> colorRange;
+        /// <summary>
+        /// Gets or sets the window handle for the target window to capture.
+        /// </summary>
+        internal static nint WindowHandle { get; set; } = 0;
+
+        /// <summary>
+        /// Gets or sets the rectangle representing the target window's dimensions.
+        /// </summary>
+        internal static PInvoke.RECT WindowRect { get; set; } = new PInvoke.RECT { left = 0, top = 0, right = 0, bottom = 0 };
+
+        /// <summary>
+        /// Gets or sets the scan radius used for capturing.
+        /// </summary>
+        internal static int ScanRadius { get; set; } = 0;
+
+        /// <summary>
+        /// Gets or sets the logger instance for logging messages during capture.
+        /// </summary>
+        internal static Logger? Logger { get; set; } = null;
+
+        /// <summary>
+        /// Gets or sets the color range used to filter captured images.
+        /// </summary>
+        internal static List<IEnumerable<int>> ColorRange { get; set; } = new List<IEnumerable<int>>();
+
 
 
         /// <summary>
-        /// checks if pixel color is within the color range
+        /// Captures a screenshot of the window based on the current window handle and scan radius.
         /// </summary>
-        /// <param name="pixel"></param>
-        /// <param name="colorRange"></param>
-        /// <returns></returns>
-        private static bool IsColorInRange( ref Color pixel, ref List<IEnumerable<int>> colorRange )
+        /// <param name="screenShot">The captured screenshot image.</param>
+        private static void CaptureWindow( ref Bitmap? screenShot )
         {
+            // Calculate the game window dimensions and aspect ratio
+            float gameWindowWidth = WindowRect.right - WindowRect.left;
+            float gameWindowHeight = WindowRect.bottom - WindowRect.top;
 
-            if ( colorRange[ 0 ].Contains( pixel.R ) && colorRange[ 1 ].Contains( pixel.G ) && colorRange[ 2 ].Contains( pixel.B ) )
+
+            // Clamp game window dimensions to ensure they're positive values
+            gameWindowWidth = ( float ) Mathf.Clamp( gameWindowWidth, 1, float.MaxValue );
+            gameWindowHeight = ( float ) Mathf.Clamp( gameWindowHeight, 1, float.MaxValue );
+
+            // Create a new bitmap if it has not been created yet
+            screenShot ??= new Bitmap( ( int ) gameWindowWidth, ( int ) gameWindowHeight );
+
+            // Capture the screen from the calculated area
+            using ( Graphics graphics = Graphics.FromImage( screenShot ) )
             {
-                return true;
+                graphics.CopyFromScreen( 0, 0, 0, 0, new Size( ( int ) gameWindowWidth, ( int ) gameWindowHeight ) );
             }
-            return false;
         }
 
 
+
         /// <summary>
-        /// filters the image based on the color, in debug mode it filters the entire image, in release mode it only filters the area within the scan radius
+        /// Checks if a pixel's color is within the specified color range.
         /// </summary>
-        /// <param name="image"></param>
-        /// <param name="colorRange"></param>
-        private static void FilterImage( ref Bitmap image, ref List<IEnumerable<int>> colorRange )
+        /// <param name="red">The red component of the pixel.</param>
+        /// <param name="green">The green component of the pixel.</param>
+        /// <param name="blue">The blue component of the pixel.</param>
+        /// <param name="colorRange">The list of color ranges for filtering.</param>
+        /// <returns>True if the pixel color is within the range, otherwise false.</returns>
+        private static bool IsColorInRange( byte red, byte green, byte blue, List<IEnumerable<int>> colorRange )
         {
+            return colorRange[ 0 ].Contains( red ) && colorRange[ 1 ].Contains( green ) && colorRange[ 2 ].Contains( blue );
+        }
 
 
-#if DEBUG
-            logger.Log( "Filtering Image" );
-#endif
-            Point center = new Point( image.Width / 2, image.Height / 2 );
 
+        /// <summary>
+        /// Filters the image by converting pixels within the color range to purple and others to black.
+        /// </summary>
+        /// <param name="image">The image to be filtered.</param>
+        /// <param name="colorRange">The list of color ranges for filtering.</param>
+        private static unsafe void FilterImageParallel( ref Bitmap image, List<IEnumerable<int>> colorRange )
+        {
+            int sourceX = image.Width / 2 - ScreenCap.ScanRadius;
+            int sourceY = image.Height / 2 - ScreenCap.ScanRadius;
+            BitmapData bmpData = image.LockBits( new Rectangle( sourceX, sourceY, ScreenCap.ScanRadius * 2, ScreenCap.ScanRadius * 2 ), ImageLockMode.ReadOnly, image.PixelFormat );
+            int bytesPerPixel = Image.GetPixelFormatSize( image.PixelFormat ) / 8;
+            int height = ScreenCap.ScanRadius * 2;
+            int width = ScreenCap.ScanRadius * 2;
 
-            for ( int y = 0; y < image.Height; y++ )
+            byte* scan0 = ( byte* ) bmpData.Scan0.ToPointer();
+
+            // Parallelize the image filtering process for better performance
+            Parallel.For( 0, height, y =>
             {
-                for ( int x = 0; x < image.Width; x++ )
+                byte* row = scan0 + ( y * bmpData.Stride );
+                for ( int x = 0; x < width; x++ )
                 {
-#if DEBUG
-                    if ( Math.Pow( y - center.Y, 2 ) + Math.Pow( x - center.X, 2 ) <= Math.Pow( scanRadius, 2 ) )
-                    {
-                        Color pixel = image.GetPixel( x, y );
-                        if ( IsColorInRange( ref pixel, ref colorRange ) )
-                        {
-                            image.SetPixel( x, y, Color.Purple );
-                        } else
-                        {
-                            image.SetPixel( x, y, Color.Black );
-                        }
+                    int pixelIndex = x * bytesPerPixel;
 
+                    byte blue = row[ pixelIndex ];
+                    byte green = row[ pixelIndex + 1 ];
+                    byte red = row[ pixelIndex + 2 ];
+
+                    // Check if the pixel is within the defined color range
+                    if ( IsColorInRange( red, green, blue, colorRange ) )
+                    {
+                        // Set pixel to purple (R:128, G:0, B:128)
+                        row[ pixelIndex ] = 128;    // B
+                        row[ pixelIndex + 1 ] = 0;  // G
+                        row[ pixelIndex + 2 ] = 128; // R
                     } else
                     {
-                        image.SetPixel( x, y, Color.Black );
+                        // Set pixel to black
+                        row[ pixelIndex ] = 0;    // B
+                        row[ pixelIndex + 1 ] = 0;  // G
+                        row[ pixelIndex + 2 ] = 0;  // R
                     }
-#else
-                    if ( Math.Pow( y - center.Y, 2 ) + Math.Pow( x - center.X, 2 ) <= Math.Pow( scanRadius, 2 ) )
-                    {
-                        Color pixel = image.GetPixel( x, y );
-                        if ( IsColorInRange( ref pixel, ref colorRange ) )
-                        {
-                            image.SetPixel( x, y, Color.Purple );
-                        } else
-                        {
-                            image.SetPixel( x, y, Color.Black );
-                        }
-                    }
-#endif
                 }
-            }
+            } );
+
+            // Unlock the image after processing
+            image.UnlockBits( bmpData );
         }
+
 
 
         /// <summary>
-        /// main function for capturing the screen and filtering the colors
+        /// Captures the screen and applies the color filtering to the image.
         /// </summary>
-        public static void CaptureAndFilter( out Bitmap screenshot )
+        /// <param name="screenShot">The captured and filtered screenshot image.</param>
+        internal static void CaptureAndFilter( ref Bitmap? screenShot )
         {
+            // Capture the window screenshot
+            CaptureWindow( ref screenShot );
 
-            int width = scanRadius * 2;
-            int height = scanRadius * 2;
-            Rectangle bounds = new( rect.left + ( rect.right - rect.left ) / 2 - scanRadius, rect.top + ( rect.bottom - rect.top ) / 2 - scanRadius, width, height );
-
-            Bitmap screenShot = new( bounds.Width, bounds.Height );
-
-            while ( tsGraphics.IsLocked() )
-            {
-                Thread.Sleep( 1 );
-            }
-            tsGraphics.CopyScreen( ref screenShot, ref bounds );
 #if DEBUG
-            logger.Log( "Screen Captured" );
-#endif
-
-            FilterImage( ref screenShot, ref colorRange );
-#if DEBUG
-            logger.Log( "Color Filtering Done" );
-#endif
 #if PRINT
             string randomNum = new Random().Next( 0, 1000 ).ToString();
-            screenShot.Save( "C:\\Users\\peter\\Pictures\\ColorFilter\\" + randomNum + ".png" );
+            screenShot.Save( "C:\Users\peter\Documents\ColorbotOutput\\" + randomNum + "Unfiltered.png" );
 #endif
-            screenShot.Dispose();
+#endif
 
-            screenshot = screenShot;
-        }
-
-
-        public static void SetColorRange( ref List<IEnumerable<int>> inputColorRange )
-        {
-            colorRange = inputColorRange;
-        }
-
-        public static void SetScanRadius( ref int inputScanRadius )
-        {
-            scanRadius = inputScanRadius;
-        }
-
-
-        public static void SetRect( ref PInvoke.RECT inputRect )
-        {
-            rect = inputRect;
-        }
-
-        public static int GetScanRadius()
-        {
-            return scanRadius;
-        }
-
-        public static PInvoke.RECT GetRect()
-        {
-            return rect;
-        }
-
-        public static void SetHwnd( ref nint hwnd )
-        {
-
-            hWnd = hwnd;
-            tsGraphics = new( hwnd );
-        }
-
-        public static nint GetHwnd()
-        {
-            return hWnd;
-        }
-
-        public static List<IEnumerable<int>> GetColorRange()
-        {
-            return colorRange;
-        }
-
-        public static void SetLogger( ref Logger inputLogger )
-        {
-            logger = inputLogger;
-        }
-    }
-
-
-
-    internal class ThreadSafeGraphics : IDisposable
-    {
-        private bool disposed = false;
-        private Graphics graphics;
-        private readonly object locker = new object();
-
-        public ThreadSafeGraphics( nint hWnd )
-        {
-            graphics = Graphics.FromHwnd( hWnd );
-        }
-
-
-        ~ThreadSafeGraphics()
-        {
-            Dispose( false );
-        }
-
-
-        public ref Graphics GetGraphics()
-        {
-            return ref graphics;
-        }
-
-
-        public bool IsLocked()
-        {
-            return Monitor.IsEntered( locker );
-        }
-
-
-        public void CopyScreen( ref Bitmap image, ref Rectangle bounds )
-        {
-            lock ( locker )
+            // Apply the color filter to the captured image
+            if ( screenShot != null )
             {
-                using ( graphics = Graphics.FromImage( image ) )
-                {
-                    graphics.CopyFromScreen( bounds.Left, bounds.Top, 0, 0, bounds.Size );
-                }
-            }
-        }
-
-
-        public void Dispose()
-        {
-            lock ( locker )
-            {
-                graphics.Dispose();
-                GC.SuppressFinalize( this );
-            }
-        }
-
-
-        protected virtual void Dispose( bool disposing )
-        {
-            if ( !disposed &&
-                disposing )
-            {
-                graphics.Dispose();
+                FilterImageParallel( ref screenShot, ColorRange );
             }
 
-            disposed = true;
+#if DEBUG
+#if PRINT
+            screenShot.Save( "C:\Users\peter\Documents\ColorbotOutput\\" + randomNum + "Filtered.png" );
+#endif
+#endif
         }
     }
 }

@@ -3,26 +3,26 @@
     /// <summary>
     /// class to handle color tolerances for color filtering
     /// </summary>
-    class ColorTolerances : IDisposable
+    internal class ColorTolerances : IDisposable
     {
         private bool disposed = false;
-        private List<IEnumerable<int>> orange;
-        private List<IEnumerable<int>> red;
-        private List<IEnumerable<int>> green;
-        private List<IEnumerable<int>> cyan;
-        private List<IEnumerable<int>> yellow;
-        private List<IEnumerable<int>> purple;
-        private List<IEnumerable<int>> skinTones;
-        private List<IEnumerable<int>> plateCarriers;
+        private List<IEnumerable<int>>? orange;
+        private List<IEnumerable<int>>? red;
+        private List<IEnumerable<int>>? green;
+        private List<IEnumerable<int>>? cyan;
+        private List<IEnumerable<int>>? yellow;
+        private List<IEnumerable<int>>? purple;
+        private List<IEnumerable<int>>? skinTones;
+        private List<IEnumerable<int>>? plateCarriers;
 
-        private readonly Logger logger;
-        private Dictionary<string, List<IEnumerable<int>>> colorDictonary;
+        private readonly Logger? logger;
+        private Dictionary<string, List<IEnumerable<int>>>? colorDictonary;
 
-        private List<IEnumerable<int>> selected;
+        private List<IEnumerable<int>>? selected;
         private readonly Mutex selectedMutex;
 
 #if DEBUG
-        public ColorTolerances( ref Logger logger )
+        internal ColorTolerances( ref Logger logger )
         {
             this.logger = logger;
             SetupColorTolerances();
@@ -33,6 +33,7 @@
         {
             SetupColorTolerances();
             this.selectedMutex = new Mutex();
+            logger = null;
         }
 #endif
 
@@ -60,7 +61,7 @@
             } else
             {
 #if DEBUG
-                this.logger.Log( "Orange tolerances Set" );
+                this.logger!.Log( "Orange tolerances Set" );
 #endif
             }
 
@@ -74,7 +75,7 @@
             } else
             {
 #if DEBUG
-                this.logger.Log( "Red tolerances Set" );
+                this.logger!.Log( "Red tolerances Set" );
 #endif
             }
 
@@ -88,7 +89,7 @@
             } else
             {
 #if DEBUG
-                this.logger.Log( "Green tolerances Set" );
+                this.logger!.Log( "Green tolerances Set" );
 #endif
             }
 
@@ -102,7 +103,7 @@
             } else
             {
 #if DEBUG
-                this.logger.Log( "Cyan tolerances Set" );
+                this.logger!.Log( "Cyan tolerances Set" );
 #endif
             }
 
@@ -116,7 +117,7 @@
             } else
             {
 #if DEBUG
-                this.logger.Log( "Yellow tolerances Set" );
+                this.logger!.Log( "Yellow tolerances Set" );
 #endif
             }
 
@@ -130,7 +131,7 @@
             } else
             {
 #if DEBUG
-                this.logger.Log( "Purple tolerances Set" );
+                this.logger!.Log( "Purple tolerances Set" );
 #endif
             }
 
@@ -144,7 +145,7 @@
             } else
             {
 #if DEBUG
-                this.logger.Log( "SkinTones tolerances Set" );
+                this.logger!.Log( "SkinTones tolerances Set" );
 #endif
             }
             IEnumerable<int> plateCarrierB = Enumerable.Range( 110, 177 );
@@ -157,7 +158,7 @@
             } else
             {
 #if DEBUG
-                this.logger.Log( "PlateCarriers tolerances Set" );
+                this.logger!.Log( "PlateCarriers tolerances Set" );
 #endif
 
                 this.colorDictonary = new Dictionary<string, List<IEnumerable<int>>>();
@@ -173,11 +174,17 @@
         }
 
 
-        public List<IEnumerable<int>> GetColorTolerance( string color )
+        internal List<IEnumerable<int>> GetColorTolerance( string color )
         {
-            if ( colorDictonary.ContainsKey( color ) )
+            if ( colorDictonary != null )
             {
-                return colorDictonary[ color ];
+                if ( colorDictonary.TryGetValue( color, out List<IEnumerable<Int32>>? value ) )
+                {
+                    return value;
+                } else
+                {
+                    throw new Exception( "Color not found" );
+                }
             } else
             {
                 throw new Exception( "Color not found" );
@@ -185,41 +192,69 @@
         }
 
 
-        public List<IEnumerable<int>> GetColorTolerance()
+        internal List<IEnumerable<int>> GetColorTolerance()
         {
-            this.selectedMutex.WaitOne();
-            var result = this.selected;
-            this.selectedMutex.ReleaseMutex();
-            return result;
-        }
-
-        public void SetColorTolerance( string color )
-        {
+            //check if mutex is locked, if it is wait for it to be released
             this.selectedMutex.WaitOne();
 
-            if ( colorDictonary.ContainsKey( color ) )
+            try
             {
-                this.selected = colorDictonary[ color ];
-            } else
+                if ( this.selected != null )
+                {
+                    return this.selected;
+                } else
+                {
+                    throw new Exception( "Color not found" );
+                }
+
+            } finally
             {
                 this.selectedMutex.ReleaseMutex();
-                throw new Exception( "Color not found" );
             }
+        }
 
-            this.selectedMutex.ReleaseMutex();
+        internal void SetColorTolerance( string color )
+        {
+            this.selectedMutex.WaitOne();
+            try
+            {
+
+                if ( colorDictonary!.ContainsKey( color ) )
+                {
+                    this.selected = colorDictonary[ color ];
+                } else
+                {
+                    throw new Exception( "Color not found" );
+                }
+
+            } finally
+            {
+                this.selectedMutex.ReleaseMutex();
+            }
         }
 
 
-        public string GetColorName( List<IEnumerable<int>> color )
+        internal string GetColorName( List<IEnumerable<int>> color )
         {
-            foreach ( var item in colorDictonary )
+            this.selectedMutex.WaitOne();
+
+            try
             {
-                if ( item.Value == color )
+                if ( colorDictonary != null )
                 {
-                    return item.Key;
+                    foreach ( var item in colorDictonary )
+                    {
+                        if ( item.Value == color )
+                        {
+                            return item.Key;
+                        }
+                    }
                 }
+                return "Color not found";
+            } finally
+            {
+                this.selectedMutex.ReleaseMutex();
             }
-            return "Color not found";
         }
 
 
@@ -235,15 +270,27 @@
             if ( !disposed &&
                 disposing )
             {
-                this.orange.Clear();
-                this.red.Clear();
-                this.green.Clear();
-                this.cyan.Clear();
-                this.yellow.Clear();
-                this.purple.Clear();
-                this.skinTones.Clear();
-                this.plateCarriers.Clear();
-                this.colorDictonary.Clear();
+                if ( this.orange != null )
+                { this.orange.Clear(); this.orange = null; }
+                if ( this.red != null )
+                { this.red.Clear(); this.red = null; }
+                if ( this.green != null )
+                { this.green.Clear(); this.green = null; }
+                if ( this.cyan != null )
+                { this.cyan.Clear(); this.cyan = null; }
+                if ( this.yellow != null )
+                { this.yellow.Clear(); this.yellow = null; }
+                if ( this.purple != null )
+                { this.purple.Clear(); this.purple = null; }
+                if ( this.skinTones != null )
+                { this.skinTones.Clear(); this.skinTones = null; }
+                if ( this.plateCarriers != null )
+                { this.plateCarriers.Clear(); this.plateCarriers = null; }
+                if ( this.colorDictonary != null )
+                { this.colorDictonary.Clear(); this.colorDictonary = null; }
+                if ( this.selected != null )
+                { this.selected.Clear(); this.selected = null; }
+                this.selectedMutex.Dispose();
             }
 
             disposed = true;

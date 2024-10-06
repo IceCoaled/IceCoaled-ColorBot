@@ -35,5 +35,23 @@
         private TrackBar trackBar3;
         private Label label6;
         private ComboBox comboBox3;
+        private ToolTip toolTip1;
+        private ToolTip toolTip2;
+        private ToolTip toolTip3;
+        private Label label7;
+        private TrackBar trackBar4;
+        private Label label8;
+        private TrackBar trackBar5;
+        private Label label9;
+        private TrackBar trackBar6;
+        private ToolTip toolTip4;
+        private ToolTip toolTip5;
+        private ToolTip toolTip6;
+        private RadioButton radioButton2;
+        private Label label10;
+        private TrackBar trackBar7;
+        private ToolTip toolTip7;
+        private Button button3;
+        private CheckBox checkBox1;
     }
 }

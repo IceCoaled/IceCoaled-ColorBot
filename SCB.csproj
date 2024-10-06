@@ -9,11 +9,30 @@
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
     <Title>SCBPackageFile</Title>
     <EnforceCodeStyleInBuild>True</EnforceCodeStyleInBuild>
+    <Platforms>AnyCPU;x64</Platforms>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+    <StartupObject>SCB.Program</StartupObject>
+    <ApplicationIcon>Ice-coaled.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <Optimize>False</Optimize>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Optimize>True</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="Ice-coaled.ico" />
+  </ItemGroup>	
 
   <ItemGroup>
     <PackageReference Include="MouseKeyHook" Version="5.7.1" />
     <PackageReference Include="PInvoke.Windows.Core" Version="0.7.124" />
+    <PackageReference Include="Tesseract" Version="5.2.0" />
   </ItemGroup>
 
   <ItemGroup>
