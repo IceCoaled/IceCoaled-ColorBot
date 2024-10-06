@@ -87,54 +87,39 @@ namespace Recoil
 #endif
         }
 
-        //// <summary>
+        /// <summary>
         /// Preprocess the image to grayscale and apply thresholding, with minimal copying.
         /// </summary>
         private static Bitmap PreprocessImage( ref Bitmap img )
         {
-            // Convert to grayscale
-            Bitmap grayImage = new( img.Width, img.Height );
+            // Convert to grayscale, apply thresholding
+            Bitmap grayImage = new Bitmap( img.Width, img.Height );
             using ( Graphics g = Graphics.FromImage( grayImage ) )
             {
                 ColorMatrix colorMatrix = new ColorMatrix(
-                    [
-                [0.3f, 0.3f, 0.3f, 0, 0],
-                [0.59f, 0.59f, 0.59f, 0, 0],
-                [0.11f, 0.11f, 0.11f, 0, 0],
-                [0, 0, 0, 1, 0],
-                [0, 0, 0, 0, 1]
-                    ] );
-                ImageAttributes attributes = new();
+                    new float[][]{
+            new float[] {0.3f, 0.3f, 0.3f, 0, 0},
+            new float[] {0.59f, 0.59f, 0.59f, 0, 0},
+            new float[] {0.11f, 0.11f, 0.11f, 0, 0},
+            new float[] {0, 0, 0, 1, 0},
+            new float[] {0, 0, 0, 0, 1}
+                    } );
+                ImageAttributes attributes = new ImageAttributes();
                 attributes.SetColorMatrix( colorMatrix );
-
                 g.DrawImage( img, new Rectangle( 0, 0, img.Width, img.Height ), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes );
             }
 
-            // Lock bits for faster processing
-            BitmapData bmpData = grayImage.LockBits( new Rectangle( 0, 0, grayImage.Width, grayImage.Height ),
-                ImageLockMode.ReadWrite, grayImage.PixelFormat );
-
-            IntPtr ptr = bmpData.Scan0;
-            int bytes = Math.Abs( bmpData.Stride ) * grayImage.Height;
-            byte[] rgbValues = new byte[ bytes ];
-            System.Runtime.InteropServices.Marshal.Copy( ptr, rgbValues, 0, bytes );
-
             // Apply thresholding to increase contrast
-            int threshold = 150; // Adjust this based on results
-            for ( int i = 0; i < rgbValues.Length; i += 4 ) // Assuming 32bppArgb format
+            for ( int x = 0; x < grayImage.Width; x++ )
             {
-                byte grayValue = ( byte ) ( 0.3 * rgbValues[ i + 2 ] + 0.59 * rgbValues[ i + 1 ] + 0.11 * rgbValues[ i ] );
-                byte newValue = ( grayValue < threshold ) ? ( byte ) 0 : ( byte ) 255;
-
-                // Set the new grayscale value back into the array
-                rgbValues[ i ] = newValue;
-                rgbValues[ i + 1 ] = newValue;
-                rgbValues[ i + 2 ] = newValue;
+                for ( int y = 0; y < grayImage.Height; y++ )
+                {
+                    Color pixelColor = grayImage.GetPixel( x, y );
+                    int thresholdValue = 150; // Adjust threshold if necessary
+                    int newColorValue = ( pixelColor.R + pixelColor.G + pixelColor.B ) / 3 < thresholdValue ? 0 : 255;
+                    grayImage.SetPixel( x, y, Color.FromArgb( newColorValue, newColorValue, newColorValue ) );
+                }
             }
-
-            // Copy the modified byte array back to the bitmap
-            System.Runtime.InteropServices.Marshal.Copy( rgbValues, 0, ptr, bytes );
-            grayImage.UnlockBits( bmpData );
 
             return grayImage;
         }
@@ -154,6 +139,8 @@ namespace Recoil
 
         private static string CorrectOCRText( ref string ocrText )
         {
+
+
             // Dictionary for common replacements
             Dictionary<char, char> replacements = new()
             {
@@ -178,6 +165,18 @@ namespace Recoil
                 {
                     result.Append( c );
                 }
+            }
+
+            // Specific replacements for common OCR errors
+
+            switch ( ocrText )
+            {
+                case "M4 FURY\n":
+                case "M43 FURY\n":
+                return "M49 FURY\n";
+                case "M667 REAVER\n":
+                return "M67 REAVER\n";
+                //no default just in case
             }
 
             return result.ToString();
@@ -728,65 +727,55 @@ namespace Recoil
         {
             List<string> CurrentAddedGuns = new()
             {
-                "BERSERKER RB3",
-                "BLACKOUT",
-                "BUZZSAW RT40",
-                "CRUSADER",
-                "CYCLONE",
-                "M25 HORNET",
-                "M49 FURY",
-                "M67 REAVER",
-                "WHISPER"
+                "BERSERKER RB3", "BLACKOUT", "BUZZSAW RT40", "CRUSADER",
+                "CYCLONE", "M25 HORNET", "M49 FURY", "M67 REAVER", "WHISPER"
             };
 
             Logger localLogger = logger;
             string lastName = "";
             PInvoke.RECT gameRect = PlayerData.GetRect();
             ScreenCaptureOCR screenCaptureOCR = new( ref gameRect );
-            int primaryWeaponKey = Utils.MouseInput.VK_1;
+            int buyKey = Utils.MouseInput.VK_B;
+            int escapeKey = Utils.MouseInput.VK_ESCAPE;
 
+            // Refactor patterns if the game window has changed
             if ( gameRect.top != OriginalWindowRect.top ||
-                    gameRect.bottom != OriginalWindowRect.bottom ||
-                    gameRect.right != OriginalWindowRect.right ||
-                    gameRect.left != OriginalWindowRect.left )
+                gameRect.bottom != OriginalWindowRect.bottom ||
+                gameRect.right != OriginalWindowRect.right ||
+                gameRect.left != OriginalWindowRect.left )
             {
                 RefactorAllPatterns( ref gameRect );
             }
 
+            // Automatically monitor the screen for weapon name changes
             while ( !RecoilPatternSource.Token.IsCancellationRequested )
             {
-
-                if ( Utils.MouseInput.IsKeyPressed( ref primaryWeaponKey ) )
+                if ( Utils.MouseInput.IsKeyPressed( ref buyKey ) )
                 {
-                    Thread.Sleep( 500 );//wait for the weapon text to appear
+                    await HandleBuyState( escapeKey );
+                    // Automatically check for weapon name change using OCR
                     string weaponName = screenCaptureOCR.PerformOCRForWeaponName();
                     if ( weaponName != lastName )
                     {
                         lastName = weaponName;
-                        if ( CurrentAddedGuns.Contains( weaponName ) )
-                        {
-                            CurrentPattern = GetRecoilPattern( weaponName );
-                            localLogger.Log( $"Current weapon: {weaponName}" );
-                        } else
-                        {
-                            //default to blackouts pattern
-                            CurrentPattern = GetRecoilPattern( "BLACKOUT" );
-                            lastName = "BLACKOUT";
-                        }
+                        CurrentPattern = CurrentAddedGuns.Contains( weaponName )
+                            ? GetRecoilPattern( weaponName )
+                            : GetRecoilPattern( "BLACKOUT" );  // Default to BLACKOUT
+                        localLogger.Log( $"Weapon name detected: {weaponName}" );
                     }
                 }
 
-                if ( gameRect.top != PlayerData.GetRect().top ||
-                    gameRect.bottom != PlayerData.GetRect().bottom ||
-                    gameRect.right != PlayerData.GetRect().right ||
-                    gameRect.left != PlayerData.GetRect().left )
+
+                // If game window has changed, refactor patterns and update OCR rect
+                var newGameRect = PlayerData.GetRect();
+                if ( HasWindowChanged( ref gameRect, ref newGameRect ) )
                 {
-                    gameRect = PlayerData.GetRect();
+                    gameRect = newGameRect;
                     RefactorAllPatterns( ref gameRect );
                     screenCaptureOCR.GameRect = gameRect;
                 }
 
-                await Task.Delay( 100 );
+                await Task.Delay( 500 ); // Adjust interval for how often you want to check the weapon name
             }
 
             screenCaptureOCR.Dispose();
@@ -797,64 +786,82 @@ namespace Recoil
         {
             List<string> CurrentAddedGuns = new()
             {
-                "BERSERKER RB3",
-                "BLACKOUT",
-                "BUZZSAW RT40",
-                "CRUSADER",
-                "CYCLONE",
-                "M25 HORNET",
-                "M49 FURY",
-                "M67 REAVER",
-                "WHISPER"
+                "BERSERKER RB3", "BLACKOUT", "BUZZSAW RT40", "CRUSADER",
+                "CYCLONE", "M25 HORNET", "M49 FURY", "M67 REAVER", "WHISPER"
             };
 
             string lastName = "";
             PInvoke.RECT gameRect = PlayerData.GetRect();
             ScreenCaptureOCR screenCaptureOCR = new( ref gameRect );
-            int primaryWeaponKey = Utils.MouseInput.VK_1;
+            int buyKey = Utils.MouseInput.VK_B;
+            int escapeKey = Utils.MouseInput.VK_ESCAPE;
 
+            // Refactor patterns if the game window has changed
             if ( gameRect.top != OriginalWindowRect.top ||
-                    gameRect.bottom != OriginalWindowRect.bottom ||
-                    gameRect.right != OriginalWindowRect.right ||
-                    gameRect.left != OriginalWindowRect.left )
+                gameRect.bottom != OriginalWindowRect.bottom ||
+                gameRect.right != OriginalWindowRect.right ||
+                gameRect.left != OriginalWindowRect.left )
             {
                 RefactorAllPatterns( ref gameRect );
             }
 
+            // Automatically monitor the screen for weapon name changes
             while ( !RecoilPatternSource.Token.IsCancellationRequested )
             {
-
-                if ( Utils.MouseInput.IsKeyPressed( ref primaryWeaponKey ) )
+                if ( Utils.MouseInput.IsKeyPressed( ref buyKey ) )
                 {
+                    await HandleBuyState( escapeKey );
+                    // Automatically check for weapon name change using OCR
                     string weaponName = screenCaptureOCR.PerformOCRForWeaponName();
                     if ( weaponName != lastName )
                     {
                         lastName = weaponName;
-                        if ( CurrentAddedGuns.Contains( weaponName ) )
-                        {
-                            CurrentPattern = GetRecoilPattern( weaponName );
-                        } else
-                        {
-                            //default to blackouts pattern
-                            CurrentPattern = GetRecoilPattern( "BLACKOUT" );
-                        }
+                        CurrentPattern = CurrentAddedGuns.Contains( weaponName )
+                            ? GetRecoilPattern( weaponName )
+                            : GetRecoilPattern( "BLACKOUT" );  // Default to BLACKOUT
                     }
                 }
 
-                if ( gameRect.top != PlayerData.GetRect().top ||
-                    gameRect.bottom != PlayerData.GetRect().bottom ||
-                    gameRect.right != PlayerData.GetRect().right ||
-                    gameRect.left != PlayerData.GetRect().left )
+
+                // If game window has changed, refactor patterns and update OCR rect
+                var newGameRect = PlayerData.GetRect();
+                if ( HasWindowChanged( ref gameRect, ref newGameRect ) )
                 {
-                    gameRect = PlayerData.GetRect();
+                    gameRect = newGameRect;
                     RefactorAllPatterns( ref gameRect );
                     screenCaptureOCR.GameRect = gameRect;
                 }
 
-                await Task.Delay( 1000 );
+                await Task.Delay( 500 ); // Adjust interval for how often you want to check the weapon name
             }
 
             screenCaptureOCR.Dispose();
+        }
+
+
+        /// <summary>
+        /// Handles the state while the player is buying (key press "B") and exits on ESC.
+        /// </summary>
+        private static async Task HandleBuyState( int escapeKey )
+        {
+            while ( true )
+            {
+                Utils.Watch.MicroSleep( 100 );
+                if ( Utils.MouseInput.IsKeyPressed( ref escapeKey ) )
+                {
+                    await Task.Delay( 1300 ); // delay to ensure the buy menu is closed, and gun name is visible
+                    break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Checks if the game window size has changed.
+        /// </summary>
+        private static bool HasWindowChanged( ref PInvoke.RECT oldRect, ref PInvoke.RECT newRect )
+        {
+            return oldRect.top != newRect.top || oldRect.bottom != newRect.bottom ||
+                   oldRect.right != newRect.right || oldRect.left != newRect.left;
         }
     }
 
