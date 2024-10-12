@@ -27,22 +27,10 @@ namespace SCB
         internal static int ScanRadius { get; set; } = 0;
 
         /// <summary>
-        /// Gets or sets the logger instance for logging messages during capture.
-        /// </summary>
-        internal static Logger? Logger { get; set; } = null;
-
-        /// <summary>
-        /// Gets or sets the color range used to filter captured images.
-        /// </summary>
-        internal static List<IEnumerable<int>> ColorRange { get; set; } = new List<IEnumerable<int>>();
-
-
-
-        /// <summary>
         /// Captures a screenshot of the window based on the current window handle and scan radius.
         /// </summary>
         /// <param name="screenShot">The captured screenshot image.</param>
-        private static void CaptureWindow( ref Bitmap? screenShot )
+        private static void CaptureWindow( ref Bitmap? screenShot, ref double captureTime )
         {
             // Calculate the game window dimensions and aspect ratio
             float gameWindowWidth = WindowRect.right - WindowRect.left;
@@ -57,27 +45,10 @@ namespace SCB
             screenShot ??= new Bitmap( ( int ) gameWindowWidth, ( int ) gameWindowHeight );
 
             // Capture the screen from the calculated area
-            using ( Graphics graphics = Graphics.FromImage( screenShot ) )
-            {
-                graphics.CopyFromScreen( 0, 0, 0, 0, new Size( ( int ) gameWindowWidth, ( int ) gameWindowHeight ) );
-            }
+            using Graphics graphics = Graphics.FromImage( screenShot );
+            graphics.CopyFromScreen( 0, 0, 0, 0, new Size( ( int ) gameWindowWidth, ( int ) gameWindowHeight ) );
+            captureTime = Utils.Watch.GetCaptureTime();
         }
-
-
-
-        /// <summary>
-        /// Checks if a pixel's color is within the specified color range.
-        /// </summary>
-        /// <param name="red">The red component of the pixel.</param>
-        /// <param name="green">The green component of the pixel.</param>
-        /// <param name="blue">The blue component of the pixel.</param>
-        /// <param name="colorRange">The list of color ranges for filtering.</param>
-        /// <returns>True if the pixel color is within the range, otherwise false.</returns>
-        private static bool IsColorInRange( byte red, byte green, byte blue, List<IEnumerable<int>> colorRange )
-        {
-            return colorRange[ 0 ].Contains( red ) && colorRange[ 1 ].Contains( green ) && colorRange[ 2 ].Contains( blue );
-        }
-
 
 
         /// <summary>
@@ -85,14 +56,15 @@ namespace SCB
         /// </summary>
         /// <param name="image">The image to be filtered.</param>
         /// <param name="colorRange">The list of color ranges for filtering.</param>
-        private static unsafe void FilterImageParallel( ref Bitmap image, List<IEnumerable<int>> colorRange )
+        private static unsafe void FilterImageParallel( ref Bitmap image )
         {
-            int sourceX = image.Width / 2 - ScreenCap.ScanRadius;
-            int sourceY = image.Height / 2 - ScreenCap.ScanRadius;
-            BitmapData bmpData = image.LockBits( new Rectangle( sourceX, sourceY, ScreenCap.ScanRadius * 2, ScreenCap.ScanRadius * 2 ), ImageLockMode.ReadOnly, image.PixelFormat );
+            var (userSelected, tanCarrier, brownCarrier) = PlayerData.GetColorTolerances();
+            int sourceX = image.Width / 2 - ( ScreenCap.ScanRadius / 2 );
+            int sourceY = image.Height / 2 - ( ScreenCap.ScanRadius / 2 );
+            BitmapData bmpData = image.LockBits( new Rectangle( sourceX, sourceY, ScreenCap.ScanRadius, ScreenCap.ScanRadius ), ImageLockMode.ReadOnly, image.PixelFormat );
             int bytesPerPixel = Image.GetPixelFormatSize( image.PixelFormat ) / 8;
-            int height = ScreenCap.ScanRadius * 2;
-            int width = ScreenCap.ScanRadius * 2;
+            int height = ScreenCap.ScanRadius;
+            int width = ScreenCap.ScanRadius;
 
             byte* scan0 = ( byte* ) bmpData.Scan0.ToPointer();
 
@@ -109,12 +81,18 @@ namespace SCB
                     byte red = row[ pixelIndex + 2 ];
 
                     // Check if the pixel is within the defined color range
-                    if ( IsColorInRange( red, green, blue, colorRange ) )
+                    if ( userSelected.IsColorInRange( red, green, blue ) )
                     {
                         // Set pixel to purple (R:128, G:0, B:128)
                         row[ pixelIndex ] = 128;    // B
                         row[ pixelIndex + 1 ] = 0;  // G
                         row[ pixelIndex + 2 ] = 128; // R
+                    } else if ( tanCarrier.IsColorInRange( red, green, blue ) || brownCarrier.IsColorInRange( red, green, blue ) )
+                    {
+                        // Set pixel to yellow (R:212, G:199, B:83) 
+                        row[ pixelIndex ] = 83;    // B
+                        row[ pixelIndex + 1 ] = 199;  // G
+                        row[ pixelIndex + 2 ] = 212;  // R
                     } else
                     {
                         // Set pixel to black
@@ -135,27 +113,28 @@ namespace SCB
         /// Captures the screen and applies the color filtering to the image.
         /// </summary>
         /// <param name="screenShot">The captured and filtered screenshot image.</param>
-        internal static void CaptureAndFilter( ref Bitmap? screenShot )
+        internal static void CaptureAndFilter( ref Bitmap? screenShot, out double captureTime )
         {
+            captureTime = 0;
             // Capture the window screenshot
-            CaptureWindow( ref screenShot );
+            CaptureWindow( ref screenShot, ref captureTime );
 
 #if DEBUG
 #if PRINT
             string randomNum = new Random().Next( 0, 1000 ).ToString();
-            screenShot.Save( "C:\Users\peter\Documents\ColorbotOutput\\" + randomNum + "Unfiltered.png" );
+            screenShot!.Save( FilesAndFolders.enemyScansFolder + randomNum + "Unfiltered.png" );
 #endif
 #endif
 
             // Apply the color filter to the captured image
             if ( screenShot != null )
             {
-                FilterImageParallel( ref screenShot, ColorRange );
+                FilterImageParallel( ref screenShot );
             }
 
 #if DEBUG
 #if PRINT
-            screenShot.Save( "C:\Users\peter\Documents\ColorbotOutput\\" + randomNum + "Filtered.png" );
+            screenShot.Save( FilesAndFolders.enemyScansFolder + randomNum + "Filtered.png" );
 #endif
 #endif
         }

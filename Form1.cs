@@ -2,509 +2,711 @@
 //#define GETRECOILPATTERN
 #endif
 
+using System.Drawing.Drawing2D;
+using MaterialSkin.Controls;
 using Recoil;
 using Utils;
-using static SCB.EnemyScanner;
 
 namespace SCB
 {
 
-    internal partial class IceColorBot : Form
+    internal partial class IceColorBot : MaterialSkin.Controls.MaterialForm
     {
-
-        private AimBot aimBot = new AimBot();
+        private Panel statusPanel;
+        private MaterialLabel statusLabel;
         private NotifyIcon trayIcon;
-        private Logger logger;
         private Thread isGameActive;
         private Thread smartKey;
-        private ColorTolerances colortolerances;
         private CancellationTokenSource activeGameCancellation;
-        internal BezierControlForm? bezierControlForm;
 #if GETRECOILPATTERN
         internal RecoilPatternCapture? recoilPatternCapture;
 #endif
 
+        Bezier bezierForm;
+        Configurations configurationsForm;
+
 
         internal IceColorBot()
         {
-            InitializeComponent();
-            this.DoubleBuffered = true;
 
+            // Initialize MaterialSkinManager
+            var materialSkinManager = MaterialSkin.MaterialSkinManager.Instance;
+            materialSkinManager.AddFormToManage( this );
+            materialSkinManager.Theme = MaterialSkin.MaterialSkinManager.Themes.DARK;  // Change to DARK or LIGHT
 
+            // Customize the color scheme (primary, accent, text shade)
+            materialSkinManager.ColorScheme = new MaterialSkin.ColorScheme(
+                MaterialSkin.Primary.Purple500, MaterialSkin.Primary.Purple600,
+                MaterialSkin.Primary.Yellow400, MaterialSkin.Accent.Pink400,
+                MaterialSkin.TextShade.WHITE );
+
+            //set background image
+            this.BackgroundImage = Properties.Resources.ResourceManager.GetObject( "$this.BackgroundImage" ) as Image;
+            this.BackgroundImageLayout = ImageLayout.Center;
+
+            //setup misc stuff
             activeGameCancellation = new CancellationTokenSource();
 
-            trayIcon = new NotifyIcon();
-            trayIcon.Text = "IceColorBot";
-            trayIcon.Icon = Icon;
-            trayIcon.ContextMenuStrip = new ContextMenuStrip();
+            trayIcon = new()
+            {
+                Text = "IceColorBot",
+                Icon = Icon,
+                ContextMenuStrip = new ContextMenuStrip()
+            };
             trayIcon.ContextMenuStrip.Items.Add( "Exit", null, Exit );
             trayIcon.ContextMenuStrip.Items.Add( "Open", null, ReOpen );
             trayIcon.Visible = false;
 
             DarkMode.SetDarkMode( this.Handle );
 
-#if DEBUG
-            logger = new Logger();
-            logger.Start();
-            logger.Log( "Logger Initialized" );
-            colortolerances = new ColorTolerances( ref logger );
-#else
-            colortolerances = new ColorTolerances();
-#endif
-
-            isGameActive = new Thread( () => Utils.UtilsThreads.SmartGameCheck( ref activeGameCancellation, ref aimBot, ref logger ) );
+            isGameActive = new Thread( () => Utils.UtilsThreads.SmartGameCheck( ref activeGameCancellation ) );
             smartKey = new Thread( () => Utils.UtilsThreads.UiSmartKey( trayIcon, this, activeGameCancellation ) );
             isGameActive.Start();
             smartKey.Start();
 
-            toolTip1.SetToolTip( trackBar1, "Fov starts at 192 and goes up to 3840" );
-            toolTip2.SetToolTip( trackBar2, "Aim speed starts at 0 and goes up to 100" );
-            toolTip3.SetToolTip( trackBar3, "Aim delay starts at 10 microseconds and goes up to 1 millisecond" );
-            toolTip4.SetToolTip( trackBar5, "Anti-recoil X starts at 0 and goes up to 100" );
-            toolTip5.SetToolTip( trackBar6, "Anti-recoil Y starts at 0 and goes up to 100" );
-            toolTip6.SetToolTip( trackBar4, "Aim smoothing starts at 0 and goes up to 100" );
-            toolTip7.SetToolTip( trackBar7, "Deadzone starts at 0 and goes up to 50" );
-
             Utils.Mathf.SetupPermutationTable();
-            RecoilPatternProcessor.ProcessAllGunPatterns( "C:\\Users\\peter\\Documents\\ColorbotOutput" );
-#if DEBUG
-            Task.Run( () => RecoilPatternProcessor.RecoilPatternThread( logger ) );
-#else
-            Task.Run( () => RecoilPatternProcessor.RecoilPatternThread() );
-#endif
+            RecoilPatternProcessor.ProcessAllGunPatterns();
+
+
+            // Initialize the form components
+            InitializeComponent();
+            InitializeStatusBar();
+            ErrorHandler.Initialize( statusPanel!, statusLabel! );
         }
+
 
         private void InitializeComponent()
         {
-            this.components = new System.ComponentModel.Container();
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager( typeof( IceColorBot ) );
-            this.label1 = new Label();
-            this.label2 = new Label();
-            this.trackBar1 = new TrackBar();
-            this.button1 = new Button();
-            this.button2 = new Button();
-            this.label3 = new Label();
-            this.comboBox1 = new ComboBox();
-            this.radioButton1 = new RadioButton();
-            this.trackBar2 = new TrackBar();
-            this.label4 = new Label();
-            this.comboBox2 = new ComboBox();
-            this.label5 = new Label();
-            this.trackBar3 = new TrackBar();
-            this.label6 = new Label();
-            this.comboBox3 = new ComboBox();
-            this.toolTip1 = new ToolTip( this.components );
-            this.toolTip2 = new ToolTip( this.components );
-            this.toolTip3 = new ToolTip( this.components );
-            this.label7 = new Label();
-            this.trackBar4 = new TrackBar();
-            this.label8 = new Label();
-            this.trackBar5 = new TrackBar();
-            this.label9 = new Label();
-            this.trackBar6 = new TrackBar();
-            this.toolTip4 = new ToolTip( this.components );
-            this.toolTip5 = new ToolTip( this.components );
-            this.toolTip6 = new ToolTip( this.components );
-            this.radioButton2 = new RadioButton();
-            this.label10 = new Label();
-            this.trackBar7 = new TrackBar();
-            this.toolTip7 = new ToolTip( this.components );
-            this.button3 = new Button();
-            this.checkBox1 = new CheckBox();
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar1 ).BeginInit();
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar2 ).BeginInit();
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar3 ).BeginInit();
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar4 ).BeginInit();
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar5 ).BeginInit();
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar6 ).BeginInit();
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar7 ).BeginInit();
+            this.materialSlider1 = new MaterialSlider();
+            this.materialSlider2 = new MaterialSlider();
+            this.materialSwitch1 = new MaterialSwitch();
+            this.materialComboBox1 = new MaterialComboBox();
+            this.materialLabel1 = new MaterialLabel();
+            this.materialComboBox2 = new MaterialComboBox();
+            this.materialLabel2 = new MaterialLabel();
+            this.materialComboBox3 = new MaterialComboBox();
+            this.materialLabel3 = new MaterialLabel();
+            this.materialButton1 = new MaterialButton();
+            this.materialButton2 = new MaterialButton();
+            this.materialButton4 = new MaterialButton();
+            this.materialSwitch2 = new MaterialSwitch();
+            this.materialSlider3 = new MaterialSlider();
+            this.materialSlider4 = new MaterialSlider();
+            this.materialButton3 = new MaterialButton();
+            this.materialButton5 = new MaterialButton();
             this.SuspendLayout();
             // 
-            // label1
+            // materialSlider1
             // 
-            this.label1.AutoSize = true;
-            this.label1.Font = new Font( "Constantia", 12F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.label1.ForeColor = Color.MediumSlateBlue;
-            this.label1.Location = new Point( 64, 24 );
-            this.label1.Name = "label1";
-            this.label1.Size = new Size( 87, 19 );
-            this.label1.TabIndex = 0;
-            this.label1.Text = "Aim Speed";
+            this.materialSlider1.BackColor = Color.Indigo;
+            this.materialSlider1.BackgroundImageLayout = ImageLayout.Stretch;
+            this.materialSlider1.Depth = 0;
+            this.materialSlider1.Font = new Font( "Roboto", 12F, FontStyle.Regular, GraphicsUnit.Pixel );
+            this.materialSlider1.FontType = MaterialSkin.MaterialSkinManager.fontType.Caption;
+            this.materialSlider1.ForeColor = Color.Aquamarine;
+            this.materialSlider1.Location = new Point( 2, 175 );
+            this.materialSlider1.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialSlider1.Name = "materialSlider1";
+            this.materialSlider1.RangeMin = 1;
+            this.materialSlider1.Size = new Size( 223, 40 );
+            this.materialSlider1.TabIndex = 35;
+            this.materialSlider1.Text = "Aim Speed";
+            this.materialSlider1.UseAccentColor = true;
+            this.materialSlider1.ValueMax = 100;
+            this.materialSlider1.onValueChanged +=  this.materialSlider1_onValueChanged ;
             // 
-            // label2
+            // materialSlider2
             // 
-            this.label2.AutoSize = true;
-            this.label2.Font = new Font( "Constantia", 12F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.label2.ForeColor = Color.MediumSlateBlue;
-            this.label2.Location = new Point( 412, 24 );
-            this.label2.Name = "label2";
-            this.label2.Size = new Size( 95, 19 );
-            this.label2.TabIndex = 1;
-            this.label2.Text = "Aim Radius";
+            this.materialSlider2.Depth = 0;
+            this.materialSlider2.Font = new Font( "Roboto", 12F, FontStyle.Regular, GraphicsUnit.Pixel );
+            this.materialSlider2.FontType = MaterialSkin.MaterialSkinManager.fontType.Caption;
+            this.materialSlider2.ForeColor = Color.FromArgb(       222,       0,       0,       0 );
+            this.materialSlider2.Location = new Point( 2, 221 );
+            this.materialSlider2.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialSlider2.Name = "materialSlider2";
+            this.materialSlider2.RangeMin = 1;
+            this.materialSlider2.Size = new Size( 223, 40 );
+            this.materialSlider2.TabIndex = 36;
+            this.materialSlider2.Text = "Aim Smoothing";
+            this.materialSlider2.UseAccentColor = true;
+            this.materialSlider2.ValueMax = 100;
+            this.materialSlider2.onValueChanged +=  this.materialSlider2_onValueChanged ;
             // 
-            // trackBar1
+            // materialSwitch1
             // 
-            this.trackBar1.BackColor = Color.MediumSlateBlue;
-            this.trackBar1.Location = new Point( 384, 46 );
-            this.trackBar1.Name = "trackBar1";
-            this.trackBar1.Size = new Size( 149, 45 );
-            this.trackBar1.TabIndex = 3;
-            this.trackBar1.TickStyle = TickStyle.TopLeft;
-            this.trackBar1.Scroll += this.trackBar1_Scroll;
+            this.materialSwitch1.AutoSize = true;
+            this.materialSwitch1.Depth = 0;
+            this.materialSwitch1.FlatStyle = FlatStyle.Popup;
+            this.materialSwitch1.Location = new Point( 2, 276 );
+            this.materialSwitch1.Margin = new Padding( 0 );
+            this.materialSwitch1.MouseLocation = new Point( -1, -1 );
+            this.materialSwitch1.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialSwitch1.Name = "materialSwitch1";
+            this.materialSwitch1.Ripple = true;
+            this.materialSwitch1.Size = new Size( 133, 37 );
+            this.materialSwitch1.TabIndex = 37;
+            this.materialSwitch1.Text = "Anti-Recoil";
+            this.materialSwitch1.TextAlign = ContentAlignment.TopCenter;
+            this.materialSwitch1.UseVisualStyleBackColor = true;
+            this.materialSwitch1.CheckedChanged +=  this.materialSwitch1_CheckedChanged ;
             // 
-            // button1
+            // materialComboBox1
             // 
-            this.button1.BackColor = Color.Indigo;
-            this.button1.Font = new Font( "Constantia", 18F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.button1.ForeColor = Color.Aquamarine;
-            this.button1.Location = new Point( 30, 390 );
-            this.button1.Name = "button1";
-            this.button1.Size = new Size( 199, 36 );
-            this.button1.TabIndex = 4;
-            this.button1.Text = "Start AimBot";
-            this.button1.UseVisualStyleBackColor = false;
-            this.button1.Click += this.button1_Click;
+            this.materialComboBox1.AutoResize = false;
+            this.materialComboBox1.BackColor = Color.FromArgb(       255,       255,       255 );
+            this.materialComboBox1.Depth = 0;
+            this.materialComboBox1.DrawMode = DrawMode.OwnerDrawVariable;
+            this.materialComboBox1.DropDownHeight = 174;
+            this.materialComboBox1.DropDownStyle = ComboBoxStyle.DropDownList;
+            this.materialComboBox1.DropDownWidth = 121;
+            this.materialComboBox1.Font = new Font( "Microsoft Sans Serif", 14F, FontStyle.Bold, GraphicsUnit.Pixel );
+            this.materialComboBox1.ForeColor = Color.FromArgb(       222,       0,       0,       0 );
+            this.materialComboBox1.FormattingEnabled = true;
+            this.materialComboBox1.IntegralHeight = false;
+            this.materialComboBox1.ItemHeight = 43;
+            this.materialComboBox1.Items.AddRange( new object[] { "orange", "red", "green", "yellow", "purple", "cyan" } );
+            this.materialComboBox1.Location = new Point( 383, 203 );
+            this.materialComboBox1.MaxDropDownItems = 4;
+            this.materialComboBox1.MouseState = MaterialSkin.MouseState.OUT;
+            this.materialComboBox1.Name = "materialComboBox1";
+            this.materialComboBox1.Size = new Size( 190, 49 );
+            this.materialComboBox1.StartIndex = 0;
+            this.materialComboBox1.TabIndex = 38;
+            this.materialComboBox1.SelectedIndexChanged +=  this.materialComboBox1_SelectedIndexChanged ;
             // 
-            // button2
+            // materialLabel1
             // 
-            this.button2.BackColor = Color.Indigo;
-            this.button2.Font = new Font( "Constantia", 18F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.button2.ForeColor = Color.Aquamarine;
-            this.button2.Location = new Point( 334, 390 );
-            this.button2.Name = "button2";
-            this.button2.Size = new Size( 199, 36 );
-            this.button2.TabIndex = 5;
-            this.button2.Text = "Stop AimBot";
-            this.button2.UseVisualStyleBackColor = false;
-            this.button2.Click += this.button2_Click;
+            this.materialLabel1.AutoSize = true;
+            this.materialLabel1.Depth = 0;
+            this.materialLabel1.Font = new Font( "Roboto", 16F, FontStyle.Regular, GraphicsUnit.Pixel );
+            this.materialLabel1.FontType = MaterialSkin.MaterialSkinManager.fontType.Subtitle1;
+            this.materialLabel1.HighEmphasis = true;
+            this.materialLabel1.Location = new Point( 420, 181 );
+            this.materialLabel1.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialLabel1.Name = "materialLabel1";
+            this.materialLabel1.Size = new Size( 118, 19 );
+            this.materialLabel1.TabIndex = 39;
+            this.materialLabel1.Text = "Color Selection\r\n";
+            this.materialLabel1.UseAccent = true;
             // 
-            // label3
+            // materialComboBox2
             // 
-            this.label3.AutoSize = true;
-            this.label3.Font = new Font( "Constantia", 18F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.label3.ForeColor = Color.MediumSlateBlue;
-            this.label3.Location = new Point( 230, 111 );
-            this.label3.Name = "label3";
-            this.label3.Size = new Size( 106, 29 );
-            this.label3.TabIndex = 6;
-            this.label3.Text = "Aim Key";
+            this.materialComboBox2.AutoResize = false;
+            this.materialComboBox2.BackColor = Color.FromArgb(       255,       255,       255 );
+            this.materialComboBox2.Depth = 0;
+            this.materialComboBox2.DrawMode = DrawMode.OwnerDrawVariable;
+            this.materialComboBox2.DropDownHeight = 174;
+            this.materialComboBox2.DropDownStyle = ComboBoxStyle.DropDownList;
+            this.materialComboBox2.DropDownWidth = 121;
+            this.materialComboBox2.Font = new Font( "Microsoft Sans Serif", 14F, FontStyle.Bold, GraphicsUnit.Pixel );
+            this.materialComboBox2.ForeColor = Color.FromArgb(       222,       0,       0,       0 );
+            this.materialComboBox2.FormattingEnabled = true;
+            this.materialComboBox2.IntegralHeight = false;
+            this.materialComboBox2.ItemHeight = 43;
+            this.materialComboBox2.Items.AddRange( new object[] { "head", "body" } );
+            this.materialComboBox2.Location = new Point( 383, 298 );
+            this.materialComboBox2.MaxDropDownItems = 4;
+            this.materialComboBox2.MouseState = MaterialSkin.MouseState.OUT;
+            this.materialComboBox2.Name = "materialComboBox2";
+            this.materialComboBox2.Size = new Size( 190, 49 );
+            this.materialComboBox2.StartIndex = 0;
+            this.materialComboBox2.TabIndex = 40;
+            this.materialComboBox2.SelectedIndexChanged +=  this.materialComboBox2_SelectedIndexChanged ;
             // 
-            // comboBox1
+            // materialLabel2
             // 
-            this.comboBox1.FormattingEnabled = true;
-            this.comboBox1.Items.AddRange( new object[] { "Left Mouse Button", "Right Mouse Button", "Left Shift", "Left Control", "Left Alt" } );
-            this.comboBox1.Location = new Point( 215, 154 );
-            this.comboBox1.Name = "comboBox1";
-            this.comboBox1.Size = new Size( 135, 23 );
-            this.comboBox1.TabIndex = 7;
-            this.comboBox1.SelectedIndexChanged += this.comboBox1_SelectedIndexChanged;
+            this.materialLabel2.AutoSize = true;
+            this.materialLabel2.Depth = 0;
+            this.materialLabel2.Font = new Font( "Roboto", 16F, FontStyle.Regular, GraphicsUnit.Pixel );
+            this.materialLabel2.FontType = MaterialSkin.MaterialSkinManager.fontType.Subtitle1;
+            this.materialLabel2.HighEmphasis = true;
+            this.materialLabel2.Location = new Point( 430, 276 );
+            this.materialLabel2.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialLabel2.Name = "materialLabel2";
+            this.materialLabel2.Size = new Size( 98, 19 );
+            this.materialLabel2.TabIndex = 41;
+            this.materialLabel2.Text = "Aim Selection";
+            this.materialLabel2.UseAccent = true;
             // 
-            // radioButton1
+            // materialComboBox3
             // 
-            this.radioButton1.AutoSize = true;
-            this.radioButton1.BackColor = Color.Indigo;
-            this.radioButton1.FlatStyle = FlatStyle.Popup;
-            this.radioButton1.Font = new Font( "Constantia", 14.25F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.radioButton1.ForeColor = Color.Aquamarine;
-            this.radioButton1.Location = new Point( 30, 357 );
-            this.radioButton1.Name = "radioButton1";
-            this.radioButton1.Size = new Size( 181, 27 );
-            this.radioButton1.TabIndex = 11;
-            this.radioButton1.Text = "Minimize To Tray";
-            this.radioButton1.UseVisualStyleBackColor = false;
-            this.radioButton1.CheckedChanged += this.radioButton1_CheckedChanged;
+            this.materialComboBox3.AutoResize = false;
+            this.materialComboBox3.BackColor = Color.FromArgb(       255,       255,       255 );
+            this.materialComboBox3.Depth = 0;
+            this.materialComboBox3.DrawMode = DrawMode.OwnerDrawVariable;
+            this.materialComboBox3.DropDownHeight = 174;
+            this.materialComboBox3.DropDownStyle = ComboBoxStyle.DropDownList;
+            this.materialComboBox3.DropDownWidth = 121;
+            this.materialComboBox3.Font = new Font( "Microsoft Sans Serif", 14F, FontStyle.Bold, GraphicsUnit.Pixel );
+            this.materialComboBox3.ForeColor = Color.FromArgb(       222,       0,       0,       0 );
+            this.materialComboBox3.FormattingEnabled = true;
+            this.materialComboBox3.IntegralHeight = false;
+            this.materialComboBox3.ItemHeight = 43;
+            this.materialComboBox3.Items.AddRange( new object[] { "left mouse button", "right mouse button", "left shift", "left alt", "left control" } );
+            this.materialComboBox3.Location = new Point( 383, 115 );
+            this.materialComboBox3.MaxDropDownItems = 4;
+            this.materialComboBox3.MouseState = MaterialSkin.MouseState.OUT;
+            this.materialComboBox3.Name = "materialComboBox3";
+            this.materialComboBox3.Size = new Size( 190, 49 );
+            this.materialComboBox3.StartIndex = 0;
+            this.materialComboBox3.TabIndex = 42;
+            this.materialComboBox3.SelectedIndexChanged +=  this.materialComboBox3_SelectedIndexChanged ;
             // 
-            // trackBar2
+            // materialLabel3
             // 
-            this.trackBar2.BackColor = Color.MediumSlateBlue;
-            this.trackBar2.Location = new Point( 30, 46 );
-            this.trackBar2.Name = "trackBar2";
-            this.trackBar2.Size = new Size( 158, 45 );
-            this.trackBar2.TabIndex = 15;
-            this.trackBar2.TickStyle = TickStyle.TopLeft;
-            this.trackBar2.Scroll += this.trackBar2_Scroll;
+            this.materialLabel3.AutoSize = true;
+            this.materialLabel3.Depth = 0;
+            this.materialLabel3.Font = new Font( "Roboto", 16F, FontStyle.Regular, GraphicsUnit.Pixel );
+            this.materialLabel3.FontType = MaterialSkin.MaterialSkinManager.fontType.Subtitle1;
+            this.materialLabel3.HighEmphasis = true;
+            this.materialLabel3.Location = new Point( 444, 93 );
+            this.materialLabel3.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialLabel3.Name = "materialLabel3";
+            this.materialLabel3.Size = new Size( 59, 19 );
+            this.materialLabel3.TabIndex = 43;
+            this.materialLabel3.Text = "Aim Key";
+            this.materialLabel3.UseAccent = true;
             // 
-            // label4
+            // materialButton1
             // 
-            this.label4.AutoSize = true;
-            this.label4.Font = new Font( "Constantia", 12F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.label4.ForeColor = Color.MediumSlateBlue;
-            this.label4.Location = new Point( 399, 247 );
-            this.label4.Name = "label4";
-            this.label4.Size = new Size( 123, 19 );
-            this.label4.TabIndex = 17;
-            this.label4.Text = "Color Selection";
+            this.materialButton1.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            this.materialButton1.Density = MaterialButton.MaterialButtonDensity.Default;
+            this.materialButton1.Depth = 0;
+            this.materialButton1.FlatStyle = FlatStyle.Popup;
+            this.materialButton1.HighEmphasis = true;
+            this.materialButton1.Icon = null;
+            this.materialButton1.Location = new Point( 16, 434 );
+            this.materialButton1.Margin = new Padding( 4, 6, 4, 6 );
+            this.materialButton1.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialButton1.Name = "materialButton1";
+            this.materialButton1.NoAccentTextColor = Color.Empty;
+            this.materialButton1.Size = new Size( 125, 36 );
+            this.materialButton1.TabIndex = 44;
+            this.materialButton1.Text = "Start AimBot";
+            this.materialButton1.Type = MaterialButton.MaterialButtonType.Contained;
+            this.materialButton1.UseAccentColor = false;
+            this.materialButton1.UseVisualStyleBackColor = true;
+            this.materialButton1.Click +=  this.materialButton1_Click ;
             // 
-            // comboBox2
+            // materialButton2
             // 
-            this.comboBox2.FormattingEnabled = true;
-            this.comboBox2.Items.AddRange( new object[] { "orange", "red", "green", "yellow", "purple", "cyan" } );
-            this.comboBox2.Location = new Point( 389, 269 );
-            this.comboBox2.Name = "comboBox2";
-            this.comboBox2.Size = new Size( 144, 23 );
-            this.comboBox2.TabIndex = 18;
-            this.comboBox2.SelectedIndexChanged += this.comboBox2_SelectedIndexChanged;
+            this.materialButton2.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            this.materialButton2.Density = MaterialButton.MaterialButtonDensity.Default;
+            this.materialButton2.Depth = 0;
+            this.materialButton2.FlatStyle = FlatStyle.Popup;
+            this.materialButton2.HighEmphasis = true;
+            this.materialButton2.Icon = null;
+            this.materialButton2.Location = new Point( 444, 434 );
+            this.materialButton2.Margin = new Padding( 4, 6, 4, 6 );
+            this.materialButton2.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialButton2.Name = "materialButton2";
+            this.materialButton2.NoAccentTextColor = Color.Empty;
+            this.materialButton2.Size = new Size( 117, 36 );
+            this.materialButton2.TabIndex = 45;
+            this.materialButton2.Text = "Stop AimBot";
+            this.materialButton2.Type = MaterialButton.MaterialButtonType.Contained;
+            this.materialButton2.UseAccentColor = true;
+            this.materialButton2.UseVisualStyleBackColor = true;
+            this.materialButton2.Click +=  this.materialButton2_Click ;
             // 
-            // label5
+            // materialButton4
             // 
-            this.label5.AutoSize = true;
-            this.label5.Font = new Font( "Constantia", 12F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.label5.ForeColor = Color.MediumSlateBlue;
-            this.label5.Location = new Point( 64, 101 );
-            this.label5.Name = "label5";
-            this.label5.Size = new Size( 87, 19 );
-            this.label5.TabIndex = 19;
-            this.label5.Text = "Aim Delay";
+            this.materialButton4.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            this.materialButton4.Density = MaterialButton.MaterialButtonDensity.Dense;
+            this.materialButton4.Depth = 0;
+            this.materialButton4.FlatStyle = FlatStyle.Popup;
+            this.materialButton4.HighEmphasis = true;
+            this.materialButton4.Icon = null;
+            this.materialButton4.Location = new Point( 219, 434 );
+            this.materialButton4.Margin = new Padding( 4, 6, 4, 6 );
+            this.materialButton4.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialButton4.Name = "materialButton4";
+            this.materialButton4.NoAccentTextColor = Color.Empty;
+            this.materialButton4.Size = new Size( 123, 36 );
+            this.materialButton4.TabIndex = 47;
+            this.materialButton4.Text = "Run as Admin";
+            this.materialButton4.Type = MaterialButton.MaterialButtonType.Outlined;
+            this.materialButton4.UseAccentColor = false;
+            this.materialButton4.UseVisualStyleBackColor = true;
+            this.materialButton4.Click +=  this.materialButton4_Click ;
             // 
-            // trackBar3
+            // materialSwitch2
             // 
-            this.trackBar3.BackColor = Color.MediumSlateBlue;
-            this.trackBar3.Location = new Point( 30, 123 );
-            this.trackBar3.Name = "trackBar3";
-            this.trackBar3.Size = new Size( 158, 45 );
-            this.trackBar3.TabIndex = 20;
-            this.trackBar3.TickStyle = TickStyle.TopLeft;
-            this.trackBar3.Scroll += this.trackBar3_Scroll;
+            this.materialSwitch2.AutoSize = true;
+            this.materialSwitch2.Depth = 0;
+            this.materialSwitch2.FlatStyle = FlatStyle.Popup;
+            this.materialSwitch2.Location = new Point( 2, 324 );
+            this.materialSwitch2.Margin = new Padding( 0 );
+            this.materialSwitch2.MouseLocation = new Point( -1, -1 );
+            this.materialSwitch2.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialSwitch2.Name = "materialSwitch2";
+            this.materialSwitch2.Ripple = true;
+            this.materialSwitch2.Size = new Size( 129, 37 );
+            this.materialSwitch2.TabIndex = 48;
+            this.materialSwitch2.Text = "Prediction";
+            this.materialSwitch2.TextAlign = ContentAlignment.TopCenter;
+            this.materialSwitch2.UseVisualStyleBackColor = true;
+            this.materialSwitch2.CheckedChanged +=  this.materialSwitch2_CheckedChanged ;
             // 
-            // label6
+            // materialSlider3
             // 
-            this.label6.AutoSize = true;
-            this.label6.Font = new Font( "Constantia", 12F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.label6.ForeColor = Color.MediumSlateBlue;
-            this.label6.Location = new Point( 409, 306 );
-            this.label6.Name = "label6";
-            this.label6.Size = new Size( 110, 19 );
-            this.label6.TabIndex = 21;
-            this.label6.Text = "Aim Location";
+            this.materialSlider3.BackColor = Color.Indigo;
+            this.materialSlider3.BackgroundImageLayout = ImageLayout.Stretch;
+            this.materialSlider3.Depth = 0;
+            this.materialSlider3.Font = new Font( "Roboto", 12F, FontStyle.Regular, GraphicsUnit.Pixel );
+            this.materialSlider3.FontType = MaterialSkin.MaterialSkinManager.fontType.Caption;
+            this.materialSlider3.ForeColor = Color.Aquamarine;
+            this.materialSlider3.Location = new Point( 350, 382 );
+            this.materialSlider3.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialSlider3.Name = "materialSlider3";
+            this.materialSlider3.RangeMax = 3840;
+            this.materialSlider3.RangeMin = 100;
+            this.materialSlider3.Size = new Size( 223, 40 );
+            this.materialSlider3.TabIndex = 49;
+            this.materialSlider3.Text = "Aim Fov";
+            this.materialSlider3.UseAccentColor = true;
+            this.materialSlider3.Value = 100;
+            this.materialSlider3.ValueMax = 3840;
+            this.materialSlider3.ValueSuffix = "px";
+            this.materialSlider3.onValueChanged +=  this.materialSlider3_onValueChanged ;
             // 
-            // comboBox3
+            // materialSlider4
             // 
-            this.comboBox3.FormattingEnabled = true;
-            this.comboBox3.Items.AddRange( new object[] { "head", "body" } );
-            this.comboBox3.Location = new Point( 393, 328 );
-            this.comboBox3.Name = "comboBox3";
-            this.comboBox3.Size = new Size( 140, 23 );
-            this.comboBox3.TabIndex = 22;
-            this.comboBox3.SelectedIndexChanged += this.comboBox3_SelectedIndexChanged;
+            this.materialSlider4.BackColor = Color.Indigo;
+            this.materialSlider4.BackgroundImageLayout = ImageLayout.Stretch;
+            this.materialSlider4.Depth = 0;
+            this.materialSlider4.Font = new Font( "Roboto", 12F, FontStyle.Regular, GraphicsUnit.Pixel );
+            this.materialSlider4.FontType = MaterialSkin.MaterialSkinManager.fontType.Caption;
+            this.materialSlider4.ForeColor = Color.Aquamarine;
+            this.materialSlider4.Location = new Point( 2, 129 );
+            this.materialSlider4.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialSlider4.Name = "materialSlider4";
+            this.materialSlider4.RangeMin = 1;
+            this.materialSlider4.Size = new Size( 223, 40 );
+            this.materialSlider4.TabIndex = 50;
+            this.materialSlider4.Text = "Deadzone";
+            this.materialSlider4.UseAccentColor = true;
+            this.materialSlider4.ValueMax = 100;
+            this.materialSlider4.onValueChanged +=  this.materialSlider4_onValueChanged ;
             // 
-            // toolTip1
+            // materialButton3
             // 
-            this.toolTip1.ToolTipIcon = ToolTipIcon.Info;
-            this.toolTip1.ToolTipTitle = "Aim Radius Details";
+            this.materialButton3.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            this.materialButton3.Density = MaterialButton.MaterialButtonDensity.Dense;
+            this.materialButton3.Depth = 0;
+            this.materialButton3.HighEmphasis = true;
+            this.materialButton3.Icon = null;
+            this.materialButton3.Location = new Point( 6, 382 );
+            this.materialButton3.Margin = new Padding( 4, 6, 4, 6 );
+            this.materialButton3.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialButton3.Name = "materialButton3";
+            this.materialButton3.NoAccentTextColor = Color.Empty;
+            this.materialButton3.Size = new Size( 190, 36 );
+            this.materialButton3.TabIndex = 51;
+            this.materialButton3.Text = "Bezier Customization";
+            this.materialButton3.Type = MaterialButton.MaterialButtonType.Outlined;
+            this.materialButton3.UseAccentColor = true;
+            this.materialButton3.UseVisualStyleBackColor = true;
+            this.materialButton3.Click +=  this.materialButton3_Click ;
             // 
-            // toolTip2
+            // materialButton5
             // 
-            this.toolTip2.ToolTipIcon = ToolTipIcon.Info;
-            this.toolTip2.ToolTipTitle = "Aim Speed Details";
-            // 
-            // toolTip3
-            // 
-            this.toolTip3.ToolTipIcon = ToolTipIcon.Info;
-            this.toolTip3.ToolTipTitle = "Aim Delay Details";
-            // 
-            // label7
-            // 
-            this.label7.AutoSize = true;
-            this.label7.Font = new Font( "Constantia", 12F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.label7.ForeColor = Color.MediumSlateBlue;
-            this.label7.Location = new Point( 47, 185 );
-            this.label7.Name = "label7";
-            this.label7.Size = new Size( 127, 19 );
-            this.label7.TabIndex = 23;
-            this.label7.Text = "Aim Smoothing";
-            // 
-            // trackBar4
-            // 
-            this.trackBar4.BackColor = Color.MediumSlateBlue;
-            this.trackBar4.Location = new Point( 30, 207 );
-            this.trackBar4.Name = "trackBar4";
-            this.trackBar4.Size = new Size( 158, 45 );
-            this.trackBar4.TabIndex = 24;
-            this.trackBar4.TickStyle = TickStyle.TopLeft;
-            this.trackBar4.Scroll += this.trackBar4_Scroll!;
-            // 
-            // label8
-            // 
-            this.label8.AutoSize = true;
-            this.label8.Font = new Font( "Constantia", 12F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.label8.ForeColor = Color.MediumSlateBlue;
-            this.label8.Location = new Point( 399, 101 );
-            this.label8.Name = "label8";
-            this.label8.Size = new Size( 108, 19 );
-            this.label8.TabIndex = 25;
-            this.label8.Text = "Anti-Recoil X";
-            // 
-            // trackBar5
-            // 
-            this.trackBar5.BackColor = Color.MediumSlateBlue;
-            this.trackBar5.Location = new Point( 384, 123 );
-            this.trackBar5.Name = "trackBar5";
-            this.trackBar5.Size = new Size( 149, 45 );
-            this.trackBar5.TabIndex = 26;
-            this.trackBar5.TickStyle = TickStyle.TopLeft;
-            this.trackBar5.Scroll += this.trackBar5_Scroll!;
-            // 
-            // label9
-            // 
-            this.label9.AutoSize = true;
-            this.label9.Font = new Font( "Constantia", 12F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.label9.ForeColor = Color.MediumSlateBlue;
-            this.label9.Location = new Point( 399, 171 );
-            this.label9.Name = "label9";
-            this.label9.Size = new Size( 107, 19 );
-            this.label9.TabIndex = 27;
-            this.label9.Text = "Anti-Recoil Y";
-            // 
-            // trackBar6
-            // 
-            this.trackBar6.BackColor = Color.MediumSlateBlue;
-            this.trackBar6.Location = new Point( 384, 193 );
-            this.trackBar6.Name = "trackBar6";
-            this.trackBar6.Size = new Size( 149, 45 );
-            this.trackBar6.TabIndex = 28;
-            this.trackBar6.TickStyle = TickStyle.TopLeft;
-            this.trackBar6.Scroll += this.trackBar6_Scroll!;
-            // 
-            // toolTip4
-            // 
-            this.toolTip4.ToolTipIcon = ToolTipIcon.Info;
-            this.toolTip4.ToolTipTitle = "Anti-Recoil X";
-            // 
-            // toolTip5
-            // 
-            this.toolTip5.ToolTipIcon = ToolTipIcon.Info;
-            this.toolTip5.ToolTipTitle = "Anti-Recoil Y";
-            // 
-            // toolTip6
-            // 
-            this.toolTip6.ToolTipIcon = ToolTipIcon.Info;
-            this.toolTip6.ToolTipTitle = "Aim Smoothing";
-            // 
-            // radioButton2
-            // 
-            this.radioButton2.AutoSize = true;
-            this.radioButton2.BackColor = Color.Indigo;
-            this.radioButton2.FlatStyle = FlatStyle.Popup;
-            this.radioButton2.Font = new Font( "Constantia", 14.25F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.radioButton2.ForeColor = Color.Aquamarine;
-            this.radioButton2.Location = new Point( 365, 357 );
-            this.radioButton2.Name = "radioButton2";
-            this.radioButton2.Size = new Size( 153, 27 );
-            this.radioButton2.TabIndex = 29;
-            this.radioButton2.Text = "Run As Admin";
-            this.radioButton2.UseVisualStyleBackColor = false;
-            this.radioButton2.CheckedChanged += this.radioButton2_CheckedChanged!;
-            // 
-            // label10
-            // 
-            this.label10.AutoSize = true;
-            this.label10.Font = new Font( "Constantia", 12F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.label10.ForeColor = Color.MediumSlateBlue;
-            this.label10.Location = new Point( 68, 269 );
-            this.label10.Name = "label10";
-            this.label10.Size = new Size( 83, 19 );
-            this.label10.TabIndex = 30;
-            this.label10.Text = "Deadzone";
-            // 
-            // trackBar7
-            // 
-            this.trackBar7.BackColor = Color.MediumSlateBlue;
-            this.trackBar7.Location = new Point( 30, 291 );
-            this.trackBar7.Name = "trackBar7";
-            this.trackBar7.Size = new Size( 158, 45 );
-            this.trackBar7.TabIndex = 31;
-            this.trackBar7.TickStyle = TickStyle.TopLeft;
-            this.trackBar7.Scroll += this.trackBar7_Scroll!;
-            // 
-            // button3
-            // 
-            this.button3.BackColor = Color.Indigo;
-            this.button3.Font = new Font( "Constantia", 12F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.button3.ForeColor = Color.Aquamarine;
-            this.button3.Location = new Point( 365, 519 );
-            this.button3.Name = "button3";
-            this.button3.Size = new Size( 198, 26 );
-            this.button3.TabIndex = 33;
-            this.button3.Text = "Bezier Customization";
-            this.button3.UseVisualStyleBackColor = false;
-            this.button3.Click += this.button3_Click!;
-            // 
-            // checkBox1
-            // 
-            this.checkBox1.AutoSize = true;
-            this.checkBox1.BackColor = Color.Indigo;
-            this.checkBox1.Font = new Font( "Constantia", 12F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0 );
-            this.checkBox1.ForeColor = Color.Aquamarine;
-            this.checkBox1.Location = new Point( 212, 185 );
-            this.checkBox1.Name = "checkBox1";
-            this.checkBox1.Size = new Size( 138, 23 );
-            this.checkBox1.TabIndex = 34;
-            this.checkBox1.Text = "Humanization";
-            this.checkBox1.UseVisualStyleBackColor = false;
-            this.checkBox1.CheckedChanged += this.checkBox1_CheckedChanged!;
+            this.materialButton5.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            this.materialButton5.Density = MaterialButton.MaterialButtonDensity.Dense;
+            this.materialButton5.Depth = 0;
+            this.materialButton5.HighEmphasis = true;
+            this.materialButton5.Icon = null;
+            this.materialButton5.Location = new Point( 423, 27 );
+            this.materialButton5.Margin = new Padding( 4, 6, 4, 6 );
+            this.materialButton5.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialButton5.Name = "materialButton5";
+            this.materialButton5.NoAccentTextColor = Color.Empty;
+            this.materialButton5.Size = new Size( 150, 36 );
+            this.materialButton5.TabIndex = 52;
+            this.materialButton5.Text = "Config Selector";
+            this.materialButton5.Type = MaterialButton.MaterialButtonType.Outlined;
+            this.materialButton5.UseAccentColor = true;
+            this.materialButton5.UseVisualStyleBackColor = true;
+            this.materialButton5.Click +=  this.materialButton5_Click ;
             // 
             // IceColorBot
             // 
             this.BackColor = Color.MidnightBlue;
-            this.BackgroundImage = ( Image ) resources.GetObject( "$this.BackgroundImage" )!;
+            this.BackgroundImage = ( Image ) resources.GetObject( "$this.BackgroundImage" );
             this.BackgroundImageLayout = ImageLayout.Center;
-            this.ClientSize = new Size( 563, 544 );
-            this.Controls.Add( this.checkBox1 );
-            this.Controls.Add( this.button3 );
-            this.Controls.Add( this.trackBar7 );
-            this.Controls.Add( this.label10 );
-            this.Controls.Add( this.radioButton2 );
-            this.Controls.Add( this.trackBar6 );
-            this.Controls.Add( this.label9 );
-            this.Controls.Add( this.trackBar5 );
-            this.Controls.Add( this.label8 );
-            this.Controls.Add( this.trackBar4 );
-            this.Controls.Add( this.label7 );
-            this.Controls.Add( this.comboBox3 );
-            this.Controls.Add( this.label6 );
-            this.Controls.Add( this.trackBar3 );
-            this.Controls.Add( this.label5 );
-            this.Controls.Add( this.comboBox2 );
-            this.Controls.Add( this.label4 );
-            this.Controls.Add( this.trackBar2 );
-            this.Controls.Add( this.radioButton1 );
-            this.Controls.Add( this.comboBox1 );
-            this.Controls.Add( this.label3 );
-            this.Controls.Add( this.button2 );
-            this.Controls.Add( this.button1 );
-            this.Controls.Add( this.trackBar1 );
-            this.Controls.Add( this.label2 );
-            this.Controls.Add( this.label1 );
-            this.DoubleBuffered = true;
-            this.Icon = ( Icon ) resources.GetObject( "$this.Icon" )!;
+            this.ClientSize = new Size( 579, 583 );
+            this.Controls.Add( this.materialButton5 );
+            this.Controls.Add( this.materialButton3 );
+            this.Controls.Add( this.materialSlider4 );
+            this.Controls.Add( this.materialSlider3 );
+            this.Controls.Add( this.materialSwitch2 );
+            this.Controls.Add( this.materialButton4 );
+            this.Controls.Add( this.materialButton2 );
+            this.Controls.Add( this.materialButton1 );
+            this.Controls.Add( this.materialLabel3 );
+            this.Controls.Add( this.materialComboBox3 );
+            this.Controls.Add( this.materialLabel2 );
+            this.Controls.Add( this.materialComboBox2 );
+            this.Controls.Add( this.materialLabel1 );
+            this.Controls.Add( this.materialComboBox1 );
+            this.Controls.Add( this.materialSwitch1 );
+            this.Controls.Add( this.materialSlider2 );
+            this.Controls.Add( this.materialSlider1 );
+            this.FormBorderStyle = FormBorderStyle.Fixed3D;
+            this.Icon = ( Icon ) resources.GetObject( "$this.Icon" );
             this.KeyPreview = true;
+            this.MaximizeBox = false;
             this.MaximumSize = new Size( 579, 583 );
             this.MinimumSize = new Size( 579, 583 );
             this.Name = "IceColorBot";
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar1 ).EndInit();
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar2 ).EndInit();
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar3 ).EndInit();
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar4 ).EndInit();
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar5 ).EndInit();
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar6 ).EndInit();
-            ( ( System.ComponentModel.ISupportInitialize ) this.trackBar7 ).EndInit();
+            this.Sizable = false;
             this.ResumeLayout( false );
             this.PerformLayout();
         }
 
-        private void trackBar1_Scroll( object? sender, EventArgs e )
+        private void InitializeStatusBar()
         {
+            // Create the status panel
+            statusPanel = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 30, // Height of the status bar
+                BackColor = Color.FromArgb( 30, 30, 30 ) // Darker color for contrast
+            };
 
-            var rad = ( trackBar1.Value * 280 );
-            PlayerData.SetAimRad( ref rad );
+            // Create the status label
+            statusLabel = new MaterialLabel
+            {
+                Text = "Ready", // Initial text
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                ForeColor = Color.LightGray, // Set text color to match the theme
+                BackColor = Color.Transparent
+            };
+
+            // Add the label to the panel
+            statusPanel.Controls.Add( statusLabel );
+
+            // Add the panel to the form
+            this.Controls.Add( statusPanel );
+        }
+
+        private void Exit( object? sender, EventArgs e )
+        {
+            trayIcon.Visible = false;
+
+            AimBot.CleanUp();
+            activeGameCancellation.Cancel();
+            isGameActive.Join();
+            activeGameCancellation.Dispose();
+            smartKey.Join();
+            RecoilPatternProcessor.RecoilPatternSource.Cancel();
+            RecoilPatternProcessor.RecoilPatternSource.Dispose();
+#if GETRECOILPATTERN
+            recoilPatternCapture?.StopMonitoring();
+            recoilPatternCapture?.Dispose();
+#endif
+            Application.Exit();
+        }
+
+        private void ReOpen( object? sender, EventArgs e )
+        {
+            trayIcon.Visible = false;
+            Show();
 
 #if DEBUG
-            logger.Log( "Aim Radius Switched To: " + PlayerData.GetAimRad() );
+            Logger.Log( "Maximized From Tray" );
 #endif
         }
 
 
-        private void button1_Click( object? sender, EventArgs e )
+        protected override void OnFormClosed( FormClosedEventArgs e )
+        {
+
+            if ( isGameActive != null &&
+                isGameActive.IsAlive )
+            {
+                activeGameCancellation.Cancel();
+                isGameActive.Join();
+                smartKey.Join();
+                activeGameCancellation.Dispose();
+                RecoilPatternProcessor.RecoilPatternSource.Cancel();
+                RecoilPatternProcessor.RecoilPatternSource.Dispose();
+            }
+            if ( trayIcon != null )
+            {
+                trayIcon.Visible = false;
+                trayIcon.Dispose();
+            }
+
+            if ( bezierForm != null )
+            {
+                bezierForm.Dispose();
+            }
+
+            if ( configurationsForm != null )
+            {
+                configurationsForm.Dispose();
+            }
+            AimBot.CleanUp();
+            Logger.CleanUp();
+            base.OnFormClosed( e );
+            Application.Exit();
+        }
+
+        protected override void OnPaint( PaintEventArgs e )
+        {
+            base.OnPaint( e );
+
+            // Create a new rectangle with a modified Y position (15 pixels down from the top)
+            var clientRect = new Rectangle( this.ClientRectangle.X, this.ClientRectangle.Y + 25,
+                                           this.ClientRectangle.Width, this.ClientRectangle.Height - 25 );
+
+            // If there is a background image, draw it within the adjusted rectangle
+            if ( this.BackgroundImage != null )
+            {
+                e.Graphics.DrawImage( this.BackgroundImage, clientRect );
+            }
+
+            // Create a GraphicsPath to define rounded corners
+            GraphicsPath path = new GraphicsPath();
+            Rectangle windowRect = this.ClientRectangle;
+            int radius = 15;
+
+            // Add the rounded rectangle to the path
+            path.AddArc( windowRect.X, windowRect.Y, radius, radius, 180, 90 );
+            path.AddArc( windowRect.Width - radius, windowRect.Y, radius, radius, 270, 90 );
+            path.AddArc( windowRect.Width - radius, windowRect.Height - radius, radius, radius, 0, 90 );
+            path.AddArc( windowRect.X, windowRect.Height - radius, radius, radius, 90, 90 );
+            path.CloseAllFigures();
+
+            // Set the form's region to the rounded rectangle
+            this.Region = new Region( path );
+        }
+
+        private void materialComboBox1_SelectedIndexChanged( object? sender, EventArgs e )
+        {
+            string colorName = "";
+            switch ( materialComboBox1.SelectedIndex )
+            {
+                case 0:
+                {
+                    colorName = "orange";
+                }
+                break;
+                case 1:
+                {
+                    colorName = "red";
+                }
+                break;
+                case 2:
+                {
+                    colorName = "green";
+                }
+                break;
+                case 3:
+                {
+                    colorName = "yellow";
+                }
+                break;
+                case 4:
+                {
+                    colorName = "purple";
+                }
+                break;
+                case 5:
+                {
+                    colorName = "cyan";
+                }
+                break;
+                default:
+                {
+                    colorName = "orange";
+                }
+                break;
+            }
+
+
+            ColorTolerances.SetColorTolerance( colorName );
+            PlayerData.SetColorTolerance( colorName );
+
+#if DEBUG
+            Logger.Log( "Color Selection Switched To: " + colorName );
+#endif
+        }
+
+        private void materialComboBox2_SelectedIndexChanged( object? sender, EventArgs e )
+        {
+            switch ( materialComboBox2.SelectedIndex )
+            {
+
+                case 0:
+                {
+                    var aimLocation = AimLocation.head;
+                    PlayerData.SetAimLocation( aimLocation );
+                }
+                break;
+                case 1:
+                {
+                    var aimLocation = AimLocation.body;
+                    PlayerData.SetAimLocation( aimLocation );
+                }
+                break;
+                default:
+                {
+                    var aimLocation = AimLocation.head;
+                    PlayerData.SetAimLocation( aimLocation );
+                }
+                break;
+            }
+        }
+
+        private void materialComboBox3_SelectedIndexChanged( object? sender, EventArgs e )
+        {
+            var key = 0;
+            switch ( materialComboBox3.SelectedIndex )
+            {
+                case 0:
+                {
+                    key = MouseInput.VK_LBUTTON;
+                    PlayerData.SetAimKey( key );
+                }
+                break;
+                case 1:
+                {
+                    key = MouseInput.VK_RBUTTON;
+                    PlayerData.SetAimKey( key );
+                }
+                break;
+                case 2:
+                {
+                    key = MouseInput.VK_LSHIFT;
+                    PlayerData.SetAimKey( key );
+                }
+                break;
+                case 3:
+                {
+                    key = MouseInput.VK_LMENU;
+                    PlayerData.SetAimKey( key );
+                }
+                break;
+                case 4:
+                {
+                    key = MouseInput.VK_LCONTROL;
+                    PlayerData.SetAimKey( key );
+                }
+                break;
+                default:
+                {
+                    key = MouseInput.VK_LBUTTON;
+                    PlayerData.SetAimKey( key );
+                }
+                break;
+            }
+        }
+
+        private void materialButton1_Click( object? sender, EventArgs e )
         {
             //            if ( aimBot == null )
             //            {
@@ -525,7 +727,7 @@ namespace SCB
 #endif
         }
 
-        private void button2_Click( object? sender, EventArgs e )
+        private void materialButton2_Click( object? sender, EventArgs e )
         {
             //aimBot.Stop();
 #if GETRECOILPATTERN
@@ -533,198 +735,37 @@ namespace SCB
 #endif
         }
 
-        private void comboBox1_SelectedIndexChanged( object? sender, EventArgs e )
+        private void materialButton4_Click( object? sender, EventArgs e )
         {
-            var key = 0;
-            switch ( comboBox1.SelectedIndex )
-            {
-                case 0:
-                {
-                    key = 0x01;
-                    PlayerData.SetAimKey( ref key, ref aimBot );
-                }
-                break;
-                case 1:
-                {
-                    key = 0x02;
-                    PlayerData.SetAimKey( ref key, ref aimBot );
-                }
-                break;
-                case 2:
-                {
-                    key = 0x10;
-                    PlayerData.SetAimKey( ref key, ref aimBot );
-                }
-                break;
-                case 3:
-                {
-                    key = 0x11;
-                    PlayerData.SetAimKey( ref key, ref aimBot );
-                }
-                break;
-                case 4:
-                {
-                    key = 0x12;
-                    PlayerData.SetAimKey( ref key, ref aimBot );
-                }
-                break;
-                default:
-                {
-                    key = 0x01;
-                    PlayerData.SetAimKey( ref key, ref aimBot );
-                }
-                break;
-            }
-
-#if DEBUG
-            logger.Log( "Aim Key Switched To: " + PlayerData.GetAimKey() );
-#endif
+            Admin.CheckAndRunAdmin();
         }
 
 
-        private void Exit( object? sender, EventArgs e )
+        private void materialSlider1_onValueChanged( object? sender, int newValue )
         {
-            trayIcon.Visible = false;
-
-            aimBot.Dispose();
-            logger.Dispose();
-            colortolerances.Dispose();
-            activeGameCancellation.Cancel();
-            isGameActive.Join();
-            activeGameCancellation.Dispose();
-            smartKey.Join();
-            bezierControlForm?.Dispose();
-            RecoilPatternProcessor.RecoilPatternSource.Cancel();
-            RecoilPatternProcessor.RecoilPatternSource.Dispose();
-#if GETRECOILPATTERN
-            recoilPatternCapture?.StopMonitoring();
-            recoilPatternCapture?.Dispose();
-#endif
-            Application.Exit();
+            double value = ( double ) newValue;
+            PlayerData.SetAimSpeed( value );
         }
 
-        private void ReOpen( object? sender, EventArgs e )
+        private void materialSlider2_onValueChanged( object? sender, int newValue )
         {
-            trayIcon.Visible = false;
-            Show();
-
-#if DEBUG
-            logger.Log( "Maximized From Tray" );
-#endif
+            double value = ( double ) newValue;
+            PlayerData.SetAimSmoothing( value );
         }
 
-        private void radioButton1_CheckedChanged( object? sender, EventArgs e )
+        private void materialSlider3_onValueChanged( object? sender, int newValue )
         {
-            trayIcon.Visible = true;
-
-            if ( radioButton1.Checked )
-            {
-#if DEBUG
-                logger.Log( "Minimized to tray" );
-#endif
-                Hide();
-                radioButton1.Checked = false;
-                radioButton1.Refresh();
-                radioButton1.Update();
-            }
-        }
-
-        private void trackBar2_Scroll( object? sender, EventArgs e )
-        {
-            double range = 100 - 0;
-            double growthFactor = 2;
-            double exponential = ( int ) Math.Pow( growthFactor, trackBar2.Value ) - 1;
-
-            double aimSpeed = 0 + ( int ) ( range * exponential / Math.Pow( growthFactor, 10 ) );
-            PlayerData.SetAimSpeed( ref aimSpeed, ref aimBot );
-#if DEBUG
-            logger.Log( "Aim Speed Switched To: " + aimSpeed );
-#endif
+            PlayerData.SetAimFov( newValue );
         }
 
 
-        private void comboBox2_SelectedIndexChanged( object? sender, EventArgs e )
+        private void materialSlider4_onValueChanged( object? sender, int newValue )
         {
-            switch ( comboBox2.SelectedIndex )
-            {
-                case 0:
-                {
-                    colortolerances.SetColorTolerance( "orange" );
-                }
-                break;
-                case 1:
-                {
-                    colortolerances.SetColorTolerance( "red" );
-                }
-                break;
-                case 2:
-                {
-                    colortolerances.SetColorTolerance( "green" );
-                }
-                break;
-                case 3:
-                {
-                    colortolerances.SetColorTolerance( "yellow" );
-                }
-                break;
-                case 4:
-                {
-                    colortolerances.SetColorTolerance( "purple" );
-                }
-                break;
-                case 5:
-                {
-                    colortolerances.SetColorTolerance( "cyan" );
-                }
-                break;
-                default:
-                {
-                    colortolerances.SetColorTolerance( "orange" );
-                }
-                break;
-            }
-
-            var color = colortolerances.GetColorTolerance();
-            PlayerData.SetColorRange( ref color );
-
-#if DEBUG
-            logger.Log( "Color Selection Switched To: " + colortolerances.GetColorName( PlayerData.GetColorRange() ) );
-#endif
+            PlayerData.SetDeadzone( newValue );
         }
 
-        private void trackBar3_Scroll( object? sender, EventArgs e )
+        void UnhandledExceptionTrapper( object sender, UnhandledExceptionEventArgs e )
         {
-
-            double range = 1000 - 10;
-            double growthFactor = 2;
-            double exponential = Math.Pow( growthFactor, trackBar3.Value ) - 1;
-
-            double aimDelay = 10 + ( range * exponential / Math.Pow( growthFactor, 10 ) );
-
-            PlayerData.SetAimDelay( ref aimDelay, ref aimBot );
-
-#if DEBUG
-            logger.Log( "Aim Delay Switched To: " + PlayerData.GetAimDelay() + ", microseconds" );
-#endif
-        }
-
-
-        protected override void OnFormClosed( FormClosedEventArgs e )
-        {
-            if ( aimBot != null )
-            {
-                aimBot.Dispose();
-            }
-
-            if ( logger != null )
-            {
-                logger.Dispose();
-            }
-
-            if ( colortolerances != null )
-            {
-                colortolerances.Dispose();
-            }
 
             if ( isGameActive != null &&
                 isGameActive.IsAlive )
@@ -736,123 +777,60 @@ namespace SCB
                 RecoilPatternProcessor.RecoilPatternSource.Cancel();
                 RecoilPatternProcessor.RecoilPatternSource.Dispose();
             }
-            bezierControlForm?.Dispose();
-            Application.Exit();
-            base.OnFormClosed( e );
-        }
-
-
-
-        private void comboBox3_SelectedIndexChanged( object? sender, EventArgs e )
-        {
-            switch ( comboBox3.SelectedIndex )
+            if ( trayIcon != null )
             {
-
-                case 0:
-                {
-                    var aimLocation = AimLocation.head;
-                    PlayerData.SetAimLocation( ref aimLocation, ref aimBot );
-                }
-                break;
-                case 1:
-                {
-                    var aimLocation = AimLocation.body;
-                    PlayerData.SetAimLocation( ref aimLocation, ref aimBot );
-                }
-                break;
-                default:
-                {
-                    var aimLocation = AimLocation.head;
-                    PlayerData.SetAimLocation( ref aimLocation, ref aimBot );
-                }
-                break;
+                trayIcon.Visible = false;
+                trayIcon.Dispose();
             }
 
-#if DEBUG
-            logger.Log( "Aim Location Switched To: " + PlayerData.GetAimLocation() );
-#endif
-        }
-
-        private void trackBar4_Scroll( object sender, EventArgs e )
-        {
-            double smoothing = ( trackBar4.Value * 10 );
-            PlayerData.SetAimSmoothing( ref smoothing, ref aimBot );
-#if DEBUG
-            logger.Log( "Aim Smoothing Switched To: " + PlayerData.GetAimSmoothing() );
-#endif
-        }
-
-        private void trackBar5_Scroll( object sender, EventArgs e )
-        {
-            //make recoil exponential from 0 to 25`
-            double range = 100 - 0;
-            double growthFactor = 1.36;
-            double exponential = Math.Pow( growthFactor, trackBar5.Value ) - 1;
-
-            double antiRecoilX = 0 + ( range * exponential / Math.Pow( growthFactor, 10 ) );
-
-            PlayerData.SetAntiRecoilX( ref antiRecoilX, ref aimBot );
-
-#if DEBUG
-            logger.Log( "Anti-Recoil X Switched To: " + PlayerData.GetAntiRecoilX() );
-#endif
-        }
-
-        private void trackBar6_Scroll( object sender, EventArgs e )
-        {
-            double range = 100 - 0;
-            double growthFactor = 1.36;
-            double exponential = Math.Pow( growthFactor, trackBar6.Value ) - 1;
-
-            double antiRecoilY = 0 + ( range * exponential / Math.Pow( growthFactor, 10 ) );
-
-            PlayerData.SetAntiRecoilY( ref antiRecoilY, ref aimBot );
-
-#if DEBUG
-            logger.Log( "Anti-Recoil Y Switched To: " + PlayerData.GetAntiRecoilY() );
-#endif
-        }
-
-        private void radioButton2_CheckedChanged( object sender, EventArgs e )
-        {
-            Admin.CheckAndRunAdmin();
-        }
-
-        private void trackBar7_Scroll( object sender, EventArgs e )
-        {
-            //deadzone starts at zero and goes up to 50 exponetially
-            double range = 50 - 1;
-            double growthFactor = 2;
-            double exponential = Math.Pow( growthFactor, trackBar7.Value ) - 1;
-
-            int deadzone = ( int ) ( 1 + ( range * exponential / Math.Pow( growthFactor, 10 ) ) );
-            PlayerData.SetDeadzone( ref deadzone, ref aimBot );
-
-#if DEBUG
-            logger.Log( "Deadzone Switched To: " + PlayerData.GetDeadzone() );
-#endif
-        }
-
-        private void button3_Click( object sender, EventArgs e )
-        {
-            bezierControlForm = new BezierControlForm();
-            bezierControlForm.Show();
-        }
-
-        private void checkBox1_CheckedChanged( object sender, EventArgs e )
-        {
-            if ( checkBox1.Checked )
+            if ( bezierForm != null )
             {
-                PlayerData.SetHumanize( true, ref aimBot );
+                bezierForm.Dispose();
+            }
+
+            if ( configurationsForm != null )
+            {
+                configurationsForm.Dispose();
+            }
+
+            AimBot.CleanUp();
+            Logger.CleanUp();
+            Application.Exit();
+        }
+
+        private void materialSwitch1_CheckedChanged( object sender, EventArgs e )
+        {
+            if ( materialSwitch1.Checked )
+            {
+                PlayerData.SetAntiRecoil( true );
             } else
             {
-                PlayerData.SetHumanize( false, ref aimBot );
+                PlayerData.SetAntiRecoil( false );
             }
+        }
 
-#if DEBUG
-            logger.Log( "Humanization Switched To: " + PlayerData.GetHumanize() );
-#endif
+        private void materialSwitch2_CheckedChanged( object sender, EventArgs e )
+        {
+            if ( materialSwitch2.Checked )
+            {
+                PlayerData.SetPrediction( true );
+            } else
+            {
+                PlayerData.SetPrediction( false );
+            }
+        }
+
+
+        private void materialButton3_Click( object sender, EventArgs e )
+        {
+            bezierForm = new();
+            bezierForm.Show();
+        }
+
+        private void materialButton5_Click( object sender, EventArgs e )
+        {
+            configurationsForm = new();
+            configurationsForm.Show();
         }
     }
-
 }

@@ -5,31 +5,18 @@ namespace SCB
     /// <summary>
     /// Class to handle logging messages to the console.
     /// </summary>
-    public class Logger : IDisposable
+    internal static class Logger
     {
-        private bool disposed = false;
-        private readonly CancellationTokenSource cancellation = new CancellationTokenSource();
-        private readonly ConcurrentQueue<string> queue = new ConcurrentQueue<string>();
-        private Thread? thread;
+        readonly private static CancellationTokenSource cancellation = new();
+        readonly private static ConcurrentQueue<string> queue = new();
+        private static Thread? thread;
 
-        /// <summary>
-        /// Initializes a new instance of the Logger class.
-        /// </summary>
-        public Logger() { }
-
-        /// <summary>
-        /// Destructor for the Logger class. Calls Dispose.
-        /// </summary>
-        ~Logger()
-        {
-            Dispose( false );
-        }
 
         /// <summary>
         /// Adds a message to the logging queue.
         /// </summary>
         /// <param name="message">The message to log.</param>
-        public void Log( string message )
+        internal static void Log( string message )
         {
             queue.Enqueue( message );
         }
@@ -37,7 +24,7 @@ namespace SCB
         /// <summary>
         /// Starts the logger thread and allocates the console for output.
         /// </summary>
-        public void Start()
+        internal static void Start()
         {
             WinApi.AllocConsole();
             var hWnd = WinApi.GetConsoleWindow();
@@ -46,52 +33,45 @@ namespace SCB
             Console.WriteLine( "IceColorBot Logger Started" );
 
             // Start a new thread that continuously processes log messages
-            this.thread = new Thread( () =>
+            thread = new Thread( () =>
             {
-                while ( !this.cancellation.Token.IsCancellationRequested )
+                while ( !cancellation.Token.IsCancellationRequested )
                 {
-                    if ( queue.Count > 0 && queue.TryDequeue( out string? msg ) )
+                    if ( !queue.IsEmpty && queue.TryDequeue( out string? msg ) )
                     {
                         Console.WriteLine( msg );
                     }
                     Thread.Sleep( 100 ); // Small delay to avoid excessive CPU usage
                 }
             } );
-            this.thread.Start();
+            thread.Start();
         }
 
         /// <summary>
         /// Stops the logger thread and frees the console.
         /// </summary>
-        public void Stop()
+        internal static void Stop()
         {
-            this.cancellation.Cancel();
-            this.thread?.Join();
+            cancellation.Cancel();
+            thread?.Join();
             WinApi.FreeConsole();
         }
 
-        /// <summary>
-        /// Releases the resources used by the Logger class.
-        /// </summary>
-        public void Dispose()
-        {
-            Dispose( true );
-            GC.SuppressFinalize( this );
-        }
+
 
         /// <summary>
-        /// Protected method to dispose of resources. Stops the logger thread if running.
+        /// Cleans up the logger thread and console.
         /// </summary>
-        /// <param name="disposing">Indicates whether to dispose of managed resources.</param>
-        protected virtual void Dispose( bool disposing )
+        internal static void CleanUp()
         {
-            if ( !disposed && disposing )
+            if ( thread != null )
             {
-                Stop();
-                WinApi.FreeConsole();
-                this.cancellation.Dispose();
+                cancellation.Cancel();
+                thread.Join();
             }
-            disposed = true;
+
+            WinApi.FreeConsole();
+            cancellation.Dispose();
         }
     }
 }

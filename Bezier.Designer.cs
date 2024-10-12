@@ -1,6 +1,6 @@
 ﻿namespace SCB
 {
-    partial class BezierControlForm
+    partial class Bezier
     {
         /// <summary>
         /// Required designer variable.
@@ -28,10 +28,22 @@
         /// </summary>
         private void InitializeComponent()
         {
-            this.components = new System.ComponentModel.Container();
-            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size( 800, 450 );
-            this.Text = "BezierControlForm";
+            this.SuspendLayout();
+            // 
+            // Bezier
+            // 
+            this.AutoScaleDimensions = new SizeF( 7F, 15F );
+            this.AutoScaleMode = AutoScaleMode.Font;
+            this.BackColor = SystemColors.ActiveCaption;
+            this.ClientSize = new Size( 800, 450 );
+            this.DrawerUseColors = true;
+            this.FormStyle = FormStyles.ActionBar_None;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
+            this.Name = "Bezier";
+            this.Padding = new Padding( 3, 24, 3, 3 );
+            this.Text = "Bezier";
+            this.ResumeLayout( false );
         }
 
         #endregion

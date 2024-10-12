@@ -1,28 +1,29 @@
-﻿using static SCB.EnemyScanner;
+﻿using Utils;
 
 
-//TODO: add locker checks to all methods
+
 namespace SCB
 {
     /// <summary>
-    /// Class to store and manage player-related data such as aim settings, window properties, and control points.
+    /// Static class to store and manage player-related data such as aim settings, window properties, and control points.
     /// </summary>
-    static class PlayerData
+    internal static class PlayerData
     {
-        private static readonly object locker = new();
-        private static double localAimDelay = 0;
-        private static double localAimSpeed = 15;
-        private static int localAimRad = 15;
-        private static int loacalDeadzone = 15;
-        private static bool localHumanize = false;
-        private static double localAimSmoothing = 15;
-        private static double antiRecoilX = 0;
-        private static double antiRecoilY = 0;
-        private static int localAimKey = 0x06;
+        private static readonly object locker = new();  // Unified lock object for thread safety
+
+        private static double localAimSpeed = 0;
+        private static int localDeadzone = 0;
+        private static double localAimSmoothing = 0;
+        private static int localAimFov = 0;
+        private static int localAimKey = 0;
+        private static bool localAntiRecoil = false;
+        private static bool localPrediction = false;
         private static nint localHWnd = nint.MaxValue;
         private static PInvoke.RECT localRect = new();
-        private static List<IEnumerable<int>> localColorRange = new List<IEnumerable<int>>();
-        private static AimLocation aimLocation;
+        private static ColorTolerance? localColorTolerance = null;
+        private static ColorTolerance? localTanCarrier;
+        private static ColorTolerance? localBrownCarrier;
+        private static AimLocation localAimLocation;
         private static PointF bezierStartPoint = new();
         private static PointF bezierControlPoint1 = new();
         private static PointF bezierControlPoint2 = new();
@@ -30,285 +31,316 @@ namespace SCB
         private static bool bezierControlPointsSet = false;
 
         /// <summary>
-        /// Sets the aim delay and updates the AimBot if necessary.
+        /// Unified method to handle thread-safe access and updates to AimBot settings.
         /// </summary>
-        /// <param name="aimDelay">The new aim delay.</param>
-        /// <param name="aimBot">Reference to the AimBot instance.</param>
-        internal static void SetAimDelay( ref double aimDelay, ref AimBot aimBot )
+        private static void UpdateAimBotIfNeeded( Action updateAction )
         {
             lock ( locker )
             {
-                localAimDelay = aimDelay;
-                if ( aimBot != null &&
-                    aimBot.AimDelay != localAimDelay )
-                {
-                    aimBot.AimDelay = aimDelay;
-                }
+                updateAction.Invoke();
             }
         }
 
+
         /// <summary>
-        /// Gets the current aim delay.
+        /// Sets the aim speed and updates the AimBot if necessary.
         /// </summary>
-        /// <returns>The current aim delay.</returns>
-        internal static double GetAimDelay()
+        internal static void SetAimSpeed( double aimSpeed )
         {
-            lock ( locker )
+            UpdateAimBotIfNeeded( () =>
             {
-                return localAimDelay;
-            }
+                if ( localAimSpeed != aimSpeed )
+                {
+                    localAimSpeed = aimSpeed;
+                    AimBot.AimSpeed = aimSpeed;
+                }
+            } );
         }
 
         /// <summary>
         /// Sets the deadzone and updates the AimBot if necessary.
         /// </summary>
-        /// <param name="deadzone">The new deadzone value.</param>
-        /// <param name="aimBot">Reference to the AimBot instance.</param>
-        internal static void SetDeadzone( ref int deadzone, ref AimBot aimBot )
+        internal static void SetDeadzone( int deadzone )
         {
-            lock ( locker )
+            UpdateAimBotIfNeeded( () =>
             {
-                loacalDeadzone = deadzone;
-                if ( aimBot != null &&
-                    aimBot.DeadZone != loacalDeadzone )
+                if ( localDeadzone != deadzone )
                 {
-                    aimBot.DeadZone = deadzone;
+                    localDeadzone = deadzone;
+                    AimBot.DeadZone = deadzone;
                 }
-            }
-        }
-
-        /// <summary>
-        /// Sets the humanize option and updates the AimBot if necessary.
-        /// </summary>
-        /// <param name="humanize">Whether to enable or disable humanization.</param>
-        /// <param name="aimBot">Reference to the AimBot instance.</param>
-        internal static void SetHumanize( bool humanize, ref AimBot aimBot )
-        {
-            lock ( locker )
-            {
-                localHumanize = humanize;
-                if ( aimBot != null &&
-                    aimBot.Humanize != localHumanize )
-                {
-                    aimBot.Humanize = humanize;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Sets the aim speed and updates the AimBot if necessary.
-        /// </summary>
-        /// <param name="aimSpeed">The new aim speed.</param>
-        /// <param name="aimBot">Reference to the AimBot instance.</param>
-        internal static void SetAimSpeed( ref double aimSpeed, ref AimBot aimBot )
-        {
-            lock ( locker )
-            {
-                localAimSpeed = aimSpeed;
-                if ( aimBot != null &&
-                    aimBot.AimSpeed != localAimSpeed )
-                {
-                    aimBot.AimSpeed = aimSpeed;
-                }
-            }
+            } );
         }
 
         /// <summary>
         /// Sets the aim smoothing and updates the AimBot if necessary.
         /// </summary>
-        /// <param name="aimSmoothing">The new aim smoothing value.</param>
-        /// <param name="aimBot">Reference to the AimBot instance.</param>
-        internal static void SetAimSmoothing( ref double aimSmoothing, ref AimBot aimBot )
+        internal static void SetAimSmoothing( double aimSmoothing )
         {
-            lock ( locker )
+            UpdateAimBotIfNeeded( () =>
             {
-                localAimSmoothing = aimSmoothing;
-                if ( aimBot != null &&
-                    aimBot.AimSmoothing != localAimSmoothing )
+                if ( localAimSmoothing != aimSmoothing )
                 {
-                    aimBot.AimSmoothing = aimSmoothing;
+                    localAimSmoothing = aimSmoothing;
+                    AimBot.AimSmoothing = aimSmoothing;
                 }
-            }
+            } );
         }
 
         /// <summary>
-        /// Sets the anti-recoil X value and updates the AimBot if necessary.
+        /// Sets the aim FOV.
         /// </summary>
-        /// <param name="antiRecoilX">The new anti-recoil X value.</param>
-        /// <param name="aimBot">Reference to the AimBot instance.</param>
-        internal static void SetAntiRecoilX( ref double antiRecoilX, ref AimBot aimBot )
+        internal static void SetAimFov( int aimFov )
         {
             lock ( locker )
             {
-                PlayerData.antiRecoilX = antiRecoilX;
-                if ( aimBot != null &&
-                    aimBot.AntiRecoilX != PlayerData.antiRecoilX )
+                localAimFov = aimFov;
+            }
+        }
+
+
+        /// <summary>
+        /// Gets the aim FOV.
+        /// </summary>
+        internal static int GetAimFov()
+        {
+            lock ( locker )
+            {
+                if ( localAimFov > 0 )
                 {
-                    aimBot.AntiRecoilX = antiRecoilX;
+
+                    return localAimFov;
                 }
+                ErrorHandler.HandleException( new Exception( "No aim FOV selected" ) );
             }
-        }
 
-        /// <summary>
-        /// Sets the anti-recoil Y value and updates the AimBot if necessary.
-        /// </summary>
-        /// <param name="antiRecoilY">The new anti-recoil Y value.</param>
-        /// <param name="aimBot">Reference to the AimBot instance.</param>
-        internal static void SetAntiRecoilY( ref double antiRecoilY, ref AimBot aimBot )
-        {
-            lock ( locker )
-            {
-                PlayerData.antiRecoilY = antiRecoilY;
-                if ( aimBot != null &&
-                    aimBot.AntiRecoilY != PlayerData.antiRecoilY )
-                {
-                    aimBot.AntiRecoilY = antiRecoilY;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Gets the current deadzone value.
-        /// </summary>
-        /// <returns>The current deadzone value.</returns>
-        internal static int GetDeadzone()
-        {
-            lock ( locker )
-            {
-                return loacalDeadzone;
-            }
-        }
-
-        /// <summary>
-        /// Gets the current anti-recoil X value.
-        /// </summary>
-        /// <returns>The current anti-recoil X value.</returns>
-        internal static double GetAntiRecoilX()
-        {
-            lock ( locker )
-            {
-                return antiRecoilX;
-            }
-        }
-
-        /// <summary>
-        /// Gets the current anti-recoil Y value.
-        /// </summary>
-        /// <returns>The current anti-recoil Y value.</returns>
-        internal static double GetAntiRecoilY()
-        {
-            lock ( locker )
-            {
-                return antiRecoilY;
-            }
-        }
-
-        /// <summary>
-        /// Gets the current aim smoothing value.
-        /// </summary>
-        /// <returns>The current aim smoothing value.</returns>
-        internal static double GetAimSmoothing()
-        {
-            lock ( locker )
-            {
-                return localAimSmoothing;
-            }
-        }
-
-        /// <summary>
-        /// Gets the current aim speed value.
-        /// </summary>
-        /// <returns>The current aim speed value.</returns>
-        internal static double GetAimSpeed()
-        {
-            lock ( locker )
-            {
-                return localAimSpeed;
-            }
-        }
-
-        /// <summary>
-        /// Gets the current humanize setting.
-        /// </summary>
-        /// <returns>True if humanization is enabled, otherwise false.</returns>
-        internal static bool GetHumanize()
-        {
-            lock ( locker )
-            {
-                return localHumanize;
-            }
-        }
-
-        /// <summary>
-        /// Sets the aim radius and updates the screen capture's scan radius.
-        /// </summary>
-        /// <param name="aimRad">The new aim radius.</param>
-        internal static void SetAimRad( ref int aimRad )
-        {
-            lock ( locker )
-            {
-                localAimRad = aimRad;
-                ScreenCap.ScanRadius = aimRad;
-            }
-        }
-
-        /// <summary>
-        /// Gets the current aim radius.
-        /// </summary>
-        /// <returns>The current aim radius.</returns>
-        internal static int GetAimRad()
-        {
-            lock ( locker )
-            {
-                return localAimRad;
-            }
+            // This line should never be reached, but the compiler requires a return value.
+            return localAimFov;
         }
 
         /// <summary>
         /// Sets the aim key and updates the AimBot if necessary.
         /// </summary>
-        /// <param name="aimKey">The new aim key.</param>
-        /// <param name="aimBot">Reference to the AimBot instance.</param>
-        internal static void SetAimKey( ref int aimKey, ref AimBot aimBot )
+        internal static void SetAimKey( int aimKey )
         {
-            lock ( locker )
+            UpdateAimBotIfNeeded( () =>
             {
-                localAimKey = aimKey;
-                if ( aimBot != null &&
-                    aimBot.AimKey != localAimKey )
+                if ( localAimKey != aimKey )
                 {
-                    aimBot.AimKey = aimKey;
+                    localAimKey = aimKey;
+                    AimBot.AimKey = aimKey;
                 }
-            }
+            } );
+
+            ErrorHandler.PrintToStatusBar( $"Aim Key: {aimKey}" );
         }
 
         /// <summary>
-        /// Gets the current aim key.
+        /// Sets the anti-recoil flag and updates the AimBot if necessary.
         /// </summary>
-        /// <returns>The current aim key.</returns>
-        internal static int GetAimKey()
+        internal static void SetAntiRecoil( bool isEnabled )
+        {
+            UpdateAimBotIfNeeded( () =>
+            {
+                if ( localAntiRecoil != isEnabled )
+                {
+                    localAntiRecoil = isEnabled;
+                    AimBot.AntiRecoil = isEnabled;
+                }
+            } );
+        }
+
+
+        /// <summary>
+        /// Sets the anti-recoil flag and updates the AimBot if necessary.
+        /// </summary>
+        internal static void SetPrediction( bool isEnabled )
+        {
+            UpdateAimBotIfNeeded( () =>
+            {
+                if ( localPrediction != isEnabled )
+                {
+                    localPrediction = isEnabled;
+                    AimBot.Prediction = isEnabled;
+                }
+            } );
+        }
+
+        /// <summary>
+        ///  Sets the aim location and updates the aimbot if necessary.   
+        /// </summary>
+        internal static void SetAimLocation( AimLocation location )
+        {
+            UpdateAimBotIfNeeded( () =>
+            {
+                if ( localAimLocation != location )
+                {
+                    localAimLocation = location;
+                    AimBot.Location = location;
+                }
+            } );
+        }
+
+        /// <summary>
+        /// Unified getter for AimBot-related settings.
+        /// </summary>
+        internal static (double aimSpeed, int deadzone, double aimSmoothing, int aimKey, AimLocation location, bool prediction, bool antiRecoil) GetAimSettings()
         {
             lock ( locker )
             {
-                return localAimKey;
+                return (localAimSpeed, localDeadzone, localAimSmoothing, localAimKey, localAimLocation, localPrediction, localAntiRecoil);
             }
         }
 
         /// <summary>
-        /// Sets the window handle and updates the screen capture's window handle.
+        /// Sets the Bezier curve control points for aim interpolation.
+        /// </summary>
+        internal static void SetBezierPoints( PointF startPoint, PointF controlPoint1, PointF controlPoint2, PointF endPoint )
+        {
+            lock ( locker )
+            {
+                bezierStartPoint = startPoint;
+                bezierControlPoint1 = controlPoint1;
+                bezierControlPoint2 = controlPoint2;
+                bezierEndPoint = endPoint;
+                bezierControlPointsSet = true;
+            }
+        }
+
+        /// <summary>
+        /// Gets the Bezier control points for aim interpolation.
+        /// </summary>
+        internal static (PointF start, PointF control1, PointF control2, PointF end) GetBezierPoints()
+        {
+            lock ( locker )
+            {
+                if ( bezierControlPointsSet )
+                {
+                    return (bezierStartPoint, bezierControlPoint1, bezierControlPoint2, bezierEndPoint);
+                }
+                ErrorHandler.HandleException( new Exception( "Bezier control points not set" ) );
+            }
+
+            // This line should never be reached, but the compiler requires a return value.
+            return (bezierStartPoint, bezierControlPoint1, bezierControlPoint2, bezierEndPoint);
+        }
+
+
+        /// <summary>
+        /// Checks if the Bezier control points have been set.
+        /// </summary>
+        internal static bool BezierControlPointsSet()
+        {
+            lock ( locker )
+            {
+                return bezierControlPointsSet;
+            }
+        }
+
+        /// <summary>
+        /// Sets the color tolerance for aim calculations.
+        /// </summary>
+        internal static void SetColorTolerance( string userSelected )
+        {
+            const string bPC = "brownPlateCarrier";
+            const string tPC = "tanPlateCarrier";
+            lock ( locker )
+            {
+                if ( localColorTolerance == null )
+                {
+                    localColorTolerance = ColorTolerances.GetColorTolerance( userSelected );
+                    localTanCarrier = ColorTolerances.GetColorTolerance( tPC );
+                    localBrownCarrier = ColorTolerances.GetColorTolerance( bPC );
+                } else
+                {
+                    localColorTolerance = ColorTolerances.GetColorTolerance( userSelected );
+                }
+
+            }
+        }
+
+        /// <summary>
+        /// Gets the current color tolerance.
+        /// </summary>
+        internal static ColorTolerance GetColorTolerance()
+        {
+
+            lock ( locker )
+            {
+                if ( localColorTolerance != null )
+                {
+                    return localColorTolerance;
+                }
+                ErrorHandler.HandleException( new Exception( "No color tolerance selected" ) );
+            }
+
+            // This line should never be reached, but the compiler requires a return value.
+            return localColorTolerance;
+        }
+
+
+        internal static (ColorTolerance userSelected, ColorTolerance tanCarrier, ColorTolerance brownCarrier) GetColorTolerances()
+        {
+            lock ( locker )
+            {
+                if ( localColorTolerance != null && localTanCarrier != null && localBrownCarrier != null )
+                {
+                    return (localColorTolerance, localTanCarrier, localBrownCarrier);
+                }
+                ErrorHandler.HandleException( new Exception( "No color tolerances selected" ) );
+            }
+
+            // This line should never be reached, but the compiler requires a return value.
+            return (localColorTolerance, localTanCarrier, localBrownCarrier);
+        }
+
+
+        // Additional methods for window handle, game rectangle, etc., can remain unchanged
+
+        /// <summary>
+        /// Sets the game window rectangle (RECT).
+        /// </summary>
+        /// <param name="rect">The new window rectangle.</param>
+        internal static void SetRect( PInvoke.RECT rect )
+        {
+            lock ( locker )
+            {
+                localRect = rect;
+            }
+        }
+
+        /// <summary>
+        /// Gets the current game window rectangle (RECT).
+        /// </summary>
+        /// <returns>The current game window rectangle.</returns>
+        internal static PInvoke.RECT GetRect()
+        {
+            lock ( locker )
+            {
+                if ( localRect.left != 0 && localRect.right != 0 && localRect.top != 0 && localRect.bottom != 0 )
+                {
+                    return localRect;
+                }
+
+            }
+
+            return localRect;
+        }
+
+        /// <summary>
+        /// Sets the window handle (HWND) for the game.
         /// </summary>
         /// <param name="hWnd">The new window handle.</param>
-        internal static void SetHwnd( ref nint hWnd )
+        internal static void SetHwnd( nint hWnd )
         {
             lock ( locker )
             {
                 localHWnd = hWnd;
-                ScreenCap.WindowHandle = hWnd;
             }
         }
 
         /// <summary>
-        /// Gets the current window handle.
+        /// Gets the current window handle (HWND).
         /// </summary>
         /// <returns>The current window handle.</returns>
         internal static nint GetHwnd()
@@ -318,154 +350,116 @@ namespace SCB
                 return localHWnd;
             }
         }
+    }
+
+
+
+
+    /// <summary>
+    /// Struct that holds information about enemy data, including position, visibility, and capture time.
+    /// </summary>
+    internal struct EnemyData
+    {
+        /// <summary>
+        /// Gets the head position of the enemy.
+        /// </summary>
+        internal PointF Head { get; private set; }
 
         /// <summary>
-        /// Sets the game window rectangle and updates the AimBot if necessary.
+        /// Gets the center position of the enemy.
         /// </summary>
-        /// <param name="rect">The new window rectangle.</param>
-        /// <param name="aimBot">Reference to the AimBot instance.</param>
-        internal static void SetRect( ref PInvoke.RECT rect, ref AimBot aimBot )
-        {
-            lock ( locker )
-            {
-                localRect = rect;
-                if ( ScreenCap.WindowRect.left != rect.left ||
-                    ScreenCap.WindowRect.right != rect.right ||
-                    ScreenCap.WindowRect.top != rect.top ||
-                    ScreenCap.WindowRect.bottom != rect.bottom )
-                {
-                    ScreenCap.WindowRect = rect;
+        internal PointF Center { get; private set; }
 
-                    if ( aimBot != null )
-                    {
-                        aimBot.GameRect = rect;
-                    }
-                }
-            }
+        /// <summary>
+        /// Gets the time at which the enemy's data was captured.
+        /// </summary>
+        internal double CaptureTime { get; private set; }
+
+        /// <summary>
+        /// Gets the current game window size and position.
+        /// </summary>
+        internal PInvoke.RECT WindowRect { get; private set; }
+
+        /// <summary>
+        /// Gets the distance of the enemy from the player.
+        /// </summary>
+        internal double Distance { get; private set; }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="EnemyData"/> struct with enemy positions, capture time, and window information.
+        /// </summary>
+        /// <param name="head">The head position of the enemy.</param>
+        /// <param name="center">The center position of the enemy.</param>
+        /// <param name="captureTime">The time the data was captured.</param>
+        /// <param name="windowRect">The current window rectangle.</param>
+        internal EnemyData( ref PointF head, ref PointF center, ref double captureTime, ref PInvoke.RECT windowRect )
+        {
+            Head = head;
+            Center = center;
+            CaptureTime = captureTime;
+            WindowRect = windowRect;
+            Distance = CalculateDistance(); // Calculate the distance to the enemy.
         }
 
         /// <summary>
-        /// Gets the current game window rectangle.
+        /// Calculates the distance from the center of the screen to the enemy's head position.
         /// </summary>
-        /// <returns>The current game window rectangle.</returns>
-        internal static PInvoke.RECT GetRect()
+        /// <returns>The calculated distance.</returns>
+        private readonly double CalculateDistance()
         {
-            lock ( locker )
-            {
-                return localRect;
-            }
+            // Calculate the center point of the game window.
+            PointF screenCenter = new( WindowRect.left + ( WindowRect.right - WindowRect.left ) / 2,
+                                             WindowRect.top + ( WindowRect.bottom - WindowRect.top ) / 2 );
+
+            // Use a hypothetical utility function (Mathf.GetDistance) to compute the distance.
+            var head = Head;
+            return Mathf.GetDistance<double>( ref screenCenter, ref head );
         }
 
         /// <summary>
-        /// Sets the color range and updates the screen capture's color range.
+        /// Updates the enemy data with new positions, capture time, and window rectangle.
         /// </summary>
-        /// <param name="colorRange">The new color range.</param>
-        internal static void SetColorRange( ref List<IEnumerable<int>> colorRange )
+        /// <param name="head">The new head position of the enemy.</param>
+        /// <param name="center">The new center position of the enemy.</param>
+        /// <param name="captureTime">The new capture time.</param>
+        /// <param name="windowRect">The updated window rectangle.</param>
+        internal void Update( ref PointF head, ref PointF center, ref double captureTime, ref PInvoke.RECT windowRect )
         {
-            lock ( locker )
-            {
-                localColorRange = colorRange;
-
-                if ( ScreenCap.ColorRange != localColorRange )
-                {
-                    ScreenCap.ColorRange = colorRange;
-                }
-            }
+            Head = head;
+            Center = center;
+            CaptureTime = captureTime;
+            WindowRect = windowRect;
+            Distance = CalculateDistance(); // Recalculate the distance based on the updated data.
         }
 
         /// <summary>
-        /// Gets the current color range.
+        /// Compares this instance to another instance of <see cref="EnemyData"/> based on the distance to the enemy.
         /// </summary>
-        /// <returns>The current color range.</returns>
-        internal static List<IEnumerable<int>> GetColorRange()
+        /// <param name="other">The other <see cref="EnemyData"/> instance to compare to.</param>
+        /// <returns>A value indicating the relative order of the objects being compared.</returns>
+        readonly internal bool CompareTo( double distance )
         {
-            lock ( locker )
-            {
-                return localColorRange;
-            }
+            return Distance < distance;
         }
 
-        /// <summary>
-        /// Sets the aim location and updates the AimBot if necessary.
-        /// </summary>
-        /// <param name="aimLocation">The new aim location.</param>
-        /// <param name="aimBot">Reference to the AimBot instance.</param>
-        internal static void SetAimLocation( ref AimLocation aimLocation, ref AimBot aimBot )
+        readonly internal PointF PredictPos( ref PointF previousPos, AimLocation location, double previousCaptrueTime )
         {
-            lock ( locker )
+            PointF currentPos = Head;
+            if ( location == AimLocation.body )
             {
-                PlayerData.aimLocation = aimLocation;
-                if ( aimBot != null &&
-                    aimLocation != aimBot.AimLocation )
-                {
-                    aimBot.AimLocation = aimLocation;
-                }
+                currentPos = Center;
             }
-        }
-
-        /// <summary>
-        /// Gets the current aim location.
-        /// </summary>
-        /// <returns>The current aim location.</returns>
-        internal static AimLocation GetAimLocation()
-        {
-            lock ( locker )
-            {
-                return aimLocation;
-            }
-        }
-
-        /// <summary>
-        /// Sets the Bezier curve control points, including 3 control points for cubic Bezier interpolation.
-        /// </summary>
-        /// <param name="startPoint">The start point of the Bezier curve.</param>
-        /// <param name="controlPoint1">The first control point of the Bezier curve.</param>
-        /// <param name="controlPoint2">The second control point of the Bezier curve.</param>
-        /// <param name="controlPoint3">The third control point of the Bezier curve (new for cubic Bezier).</param>
-        /// <param name="endPoint">The end point of the Bezier curve.</param>
-        internal static void SetBezierPoints( ref PointF startPoint, ref PointF controlPoint1, ref PointF controlPoint2, ref PointF endPoint )
-        {
-            lock ( locker )
-            {
-                bezierStartPoint = startPoint;
-                bezierControlPoint1 = controlPoint1;
-                bezierControlPoint2 = controlPoint2;
-                bezierEndPoint = endPoint;
-                bezierControlPointsSet = true; // Mark that control points have been set
-            }
-        }
-
-
-        /// <summary>
-        /// Gets the Bezier curve control points, including 3 control points for cubic Bezier interpolation.
-        /// </summary>
-        /// <param name="startPoint">Outputs the start point of the Bezier curve.</param>
-        /// <param name="controlPoint1">Outputs the first control point of the Bezier curve.</param>
-        /// <param name="controlPoint2">Outputs the second control point of the Bezier curve.</param>
-        /// <param name="controlPoint3">Outputs the third control point of the Bezier curve (new for cubic Bezier).</param>
-        /// <param name="endPoint">Outputs the end point of the Bezier curve.</param>
-        internal static void GetBezierPoints( out PointF startPoint, out PointF controlPoint1, out PointF controlPoint2, out PointF endPoint )
-        {
-            lock ( locker )
-            {
-                startPoint = bezierStartPoint;
-                controlPoint1 = bezierControlPoint1;
-                controlPoint2 = bezierControlPoint2;
-                endPoint = bezierEndPoint;
-            }
-        }
-
-
-        /// <summary>
-        /// Checks if the Bezier control points have been set.
-        /// </summary>
-        /// <returns>True if the Bezier control points have been set, otherwise false.</returns>
-        internal static bool BezierControlPointsSet()
-        {
-            lock ( locker )
-            {
-                return bezierControlPointsSet;
-            }
+            float timeDelta = ( float ) ( CaptureTime - previousCaptrueTime );
+            return Mathf.MotionExtrapolation( currentPos, previousPos, timeDelta, 3 );
         }
     }
+
+
+
+    enum AimLocation
+    {
+        head,
+        body
+    }
+
 }

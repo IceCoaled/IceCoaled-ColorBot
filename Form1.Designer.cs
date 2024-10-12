@@ -19,39 +19,22 @@
             }
             base.Dispose(disposing);
         }
-
-        private Label label1;
-        private Label label2;
-        private TrackBar trackBar1;
-        private Button button1;
-        private Button button2;
-        private Label label3;
-        private ComboBox comboBox1;
-        private RadioButton radioButton1;
-        private TrackBar trackBar2;
-        private Label label4;
-        private ComboBox comboBox2;
-        private Label label5;
-        private TrackBar trackBar3;
-        private Label label6;
-        private ComboBox comboBox3;
-        private ToolTip toolTip1;
-        private ToolTip toolTip2;
-        private ToolTip toolTip3;
-        private Label label7;
-        private TrackBar trackBar4;
-        private Label label8;
-        private TrackBar trackBar5;
-        private Label label9;
-        private TrackBar trackBar6;
-        private ToolTip toolTip4;
-        private ToolTip toolTip5;
-        private ToolTip toolTip6;
-        private RadioButton radioButton2;
-        private Label label10;
-        private TrackBar trackBar7;
-        private ToolTip toolTip7;
-        private Button button3;
-        private CheckBox checkBox1;
+        private MaterialSkin.Controls.MaterialSlider materialSlider1;
+        private MaterialSkin.Controls.MaterialSlider materialSlider2;
+        private MaterialSkin.Controls.MaterialSwitch materialSwitch1;
+        private MaterialSkin.Controls.MaterialComboBox materialComboBox1;
+        private MaterialSkin.Controls.MaterialLabel materialLabel1;
+        private MaterialSkin.Controls.MaterialComboBox materialComboBox2;
+        private MaterialSkin.Controls.MaterialLabel materialLabel2;
+        private MaterialSkin.Controls.MaterialComboBox materialComboBox3;
+        private MaterialSkin.Controls.MaterialLabel materialLabel3;
+        private MaterialSkin.Controls.MaterialButton materialButton1;
+        private MaterialSkin.Controls.MaterialButton materialButton2;
+        private MaterialSkin.Controls.MaterialButton materialButton4;
+        private MaterialSkin.Controls.MaterialSwitch materialSwitch2;
+        private MaterialSkin.Controls.MaterialSlider materialSlider3;
+        private MaterialSkin.Controls.MaterialSlider materialSlider4;
+        private MaterialSkin.Controls.MaterialButton materialButton3;
+        private MaterialSkin.Controls.MaterialButton materialButton5;
     }
 }

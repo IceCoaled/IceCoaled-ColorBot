@@ -2,11 +2,60 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Win32;
 using SCB;
 
 namespace Utils
 {
+
+    /// <summary>
+    /// Enumeration of thread affinities for the application.
+    /// simply to keep things organized and avoid confusion.
+    /// </summary>
+    internal enum ThreadAffinities
+    {
+        aimbot,
+        triggerbot,
+        enemyScan,
+        recoilManager,
+        gameCheck,
+        uiQuickAccess,
+    }
+
+
+
+
+    /// <summary>
+    /// files and folders used by the application.
+    /// used for easy access to file paths and folder names.
+    /// </summary>
+    internal struct FilesAndFolders
+    {
+        //Folders
+        internal const string configFolder = @"./config/";
+
+        internal const string tessdataFolder = @"./tessdata";
+
+        internal const string debugFolder = @"./debug/";
+
+        internal const string enemyScansFolder = @"./debug/enemyscans/";
+
+        internal const string recoilFolder = @"./recoil/";
+
+        internal const string recoilPatterns = @"./recoil/patterns/";
+
+        //Files
+        internal const string recoilPatternFile = @"./recoil/RecoilPattern.txt";
+
+        internal const string exceptionLogFile = @"./debug/exceptionLog.txt";
+
+        internal const string tessEngineFile = @"./tessdata/eng.traineddata";
+    }
+
+
+
 
     internal class Mathf
     {
@@ -788,6 +837,13 @@ namespace Utils
     {
         internal static void UiSmartKey( NotifyIcon trayIcon, IceColorBot mainClass, CancellationTokenSource formClose )
         {
+            nint hThread = WinApi.GetCurrentThread();
+            nint originalAffinity = WinApi.SetThreadAffinityMask( hThread, ( int ) ThreadAffinities.uiQuickAccess );
+            if ( originalAffinity == 0 )
+            {
+                ErrorHandler.HandleException( new Exception( "Error setting thread affinity" ) );
+            }
+
             int insert = MouseInput.VK_INSERT;
             bool isKeyPressed = false;
 
@@ -831,12 +887,23 @@ namespace Utils
                 // Small delay to prevent high CPU usage
                 Thread.Sleep( 10 );
             }
+
+            WinApi.SetThreadAffinityMask( hThread, originalAffinity );
         }
 
 
 
-        internal static void SmartGameCheck( ref CancellationTokenSource formClose, ref AimBot aimBot, ref Logger logger )
+        internal static void SmartGameCheck( ref CancellationTokenSource formClose )
         {
+            nint hThread = WinApi.GetCurrentThread();
+            nint originalAffinity = WinApi.SetThreadAffinityMask( hThread, ( int ) ThreadAffinities.gameCheck );
+            if ( originalAffinity == 0 )
+            {
+                ErrorHandler.HandleException( new Exception( "Error setting thread affinity" ) );
+            }
+
+
+
             PInvoke.RECT rect = new();
             nint firstHwnd;
             while ( !formClose.Token.IsCancellationRequested )
@@ -856,10 +923,10 @@ namespace Utils
                                 PlayerData.GetRect().top != rect.top ||
                                 PlayerData.GetRect().bottom != rect.bottom )
                             {
-                                PlayerData.SetRect( ref rect, ref aimBot );
+                                PlayerData.SetRect( rect );
 
 #if DEBUG
-                                logger.Log( "Game Rect Changed" );
+                                Logger.Log( "Game Rect Changed" );
 #endif
                             }
                         }
@@ -872,15 +939,15 @@ namespace Utils
 
                 if ( firstHwnd != nint.MaxValue && PlayerData.GetHwnd() == nint.MaxValue )
                 {
-                    PlayerData.SetHwnd( ref firstHwnd );
+                    PlayerData.SetHwnd( firstHwnd );
 
                     if ( !WinApi.GetWindowRect( PlayerData.GetHwnd(), ref rect ) )
                     {
-                        throw new Exception( "Error getting window rect" );
+                        ErrorHandler.HandleException( new Exception( "Error getting window rect" ) );
                     }
-                    PlayerData.SetRect( ref rect, ref aimBot );
+                    PlayerData.SetRect( rect );
 #if DEBUG
-                    logger.Log( "Game is active with HWND: " + PlayerData.GetHwnd() );
+                    Logger.Log( "Game is active with HWND: " + PlayerData.GetHwnd() );
 #endif
                 }
 
@@ -889,15 +956,182 @@ namespace Utils
                 if ( firstHwnd == nint.MaxValue && PlayerData.GetHwnd() != nint.MaxValue )
                 {
 
-                    PlayerData.SetHwnd( ref firstHwnd );
+                    PlayerData.SetHwnd( firstHwnd );
 #if DEBUG
-                    logger.Log( "Game is not active" );
+                    Logger.Log( "Game is not active" );
 #endif
                 }
+            }
+
+            WinApi.SetThreadAffinityMask( hThread, originalAffinity );
+        }
+    }
 
 
+    /// <summary>
+    /// class for saving and loading config files.
+    /// </summary>
+    internal static class PlayerConfigs
+    {
+        internal struct Settings
+        {
+            internal double AimSpeed { get; set; }
+            internal double AimSmoothing { get; set; }
+            internal int AimFov { get; set; }
+            internal int Deadzone { get; set; }
+            internal bool Predication { get; set; }
+            internal bool AntiRecoil { get; set; }
+            internal int AimKey { get; set; }
+            internal AimLocation Location { get; set; }
+            internal string? ColorSelected { get; set; }
+            internal PointF BezierStart { get; set; }
+            internal PointF BezierControlPoint1 { get; set; }
+            internal PointF BezierControlPoint2 { get; set; }
+            internal PointF BezierEnd { get; set; }
+
+            internal Settings( double aimSpeed, double aimSmoothing,
+                int aimFov, int deadzone, bool predication,
+                bool antiRecoil, int aimKey, AimLocation aimLocation,
+                string colorSelected )
+            {
+                AimSpeed = aimSpeed;
+                AimSmoothing = aimSmoothing;
+                AimFov = aimFov;
+                Deadzone = deadzone;
+                Predication = predication;
+                AntiRecoil = antiRecoil;
+                AimKey = aimKey;
+                Location = aimLocation;
+                ColorSelected = colorSelected;
+            }
+
+            internal void SetBezierPoints( PointF start, PointF control1, PointF control2, PointF end )
+            {
+                BezierStart = start;
+                BezierControlPoint1 = control1;
+                BezierControlPoint2 = control2;
+                BezierEnd = end;
+            }
+
+            internal bool BezierPointsSet()
+            {
+                return BezierStart != PointF.Empty && BezierControlPoint1 != PointF.Empty &&
+                    BezierControlPoint2 != PointF.Empty && BezierEnd != PointF.Empty;
             }
         }
+
+
+
+        /// <summary>
+        /// saves the current config to a .json file.
+        /// </summary>
+        internal static void SaveConfig( int configNum )
+        {
+            //create a new json serializer options object
+            var options = new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+            };
+
+            //get the current player settings
+            Settings settings = GetPlayerSettings();
+
+
+            //serialize the settings object to a json string
+            string jsonString = JsonSerializer.Serialize( settings, options );
+
+            //write the json string to a file
+            File.WriteAllText( $"config{configNum}.json", jsonString );
+        }
+
+
+
+        /// <summary>
+        /// loads a config file and applies the settings to the player.
+        /// </summary>
+        /// <param name="configNum"></param>
+        /// <param name="aimBot"></param>
+        internal static void LoadConfig( int configNum )
+        {
+            //read the json string from the file
+            string jsonString = File.ReadAllText( $"config{configNum}.json" );
+
+            //deserialize the json string to a settings object
+            Settings settings = JsonSerializer.Deserialize<Settings>( jsonString );
+
+            //set the player settings
+            SetPlayerSettings( ref settings );
+        }
+
+
+
+        /// <summary>
+        /// Gets the current player settings.
+        /// </summary>
+        /// <returns></returns>
+        private static Settings GetPlayerSettings()
+        {
+
+            //get player aim settings
+            var aimSettings = PlayerData.GetAimSettings();
+
+            //get player color settings
+            string colorSetting = ColorTolerances.GetColorName( PlayerData.GetColorTolerance() );
+
+            //get player fov
+            int aimFov = PlayerData.GetAimFov();
+
+            //create a new settings object
+            Settings settings = new( aimSettings.aimSpeed, aimSettings.aimSmoothing, aimFov,
+               aimSettings.deadzone, aimSettings.prediction, aimSettings.antiRecoil,
+               aimSettings.aimKey, aimSettings.location, colorSetting );
+
+            //if the player has bezier points set, add them to the settings object
+            if ( PlayerData.BezierControlPointsSet() )
+            {
+                var bezierSettings = PlayerData.GetBezierPoints();
+                settings.SetBezierPoints( bezierSettings.start, bezierSettings.control1, bezierSettings.control2, bezierSettings.end );
+            }
+
+            return settings;
+        }
+
+
+
+        /// <summary>
+        /// sets the player settings to player data.
+        /// </summary>
+        /// <param name="playerSettings"></param>
+        /// <param name="aimBot"></param>
+        private static void SetPlayerSettings( ref Settings playerSettings )
+        {
+            //set the aim fov
+            PlayerData.SetAimFov( playerSettings.AimFov );
+
+            //set the aim settings
+            PlayerData.SetPrediction( playerSettings.Predication );
+            PlayerData.SetAntiRecoil( playerSettings.AntiRecoil );
+            PlayerData.SetAimKey( playerSettings.AimKey );
+            PlayerData.SetAimSpeed( playerSettings.AimSpeed );
+            PlayerData.SetAimSmoothing( playerSettings.AimSmoothing );
+            PlayerData.SetDeadzone( playerSettings.Deadzone );
+            PlayerData.SetAimLocation( playerSettings.Location );
+
+            //set the color tolerance
+            if ( playerSettings.ColorSelected != null )
+            {
+                PlayerData.SetColorTolerance( playerSettings.ColorSelected );
+            }
+
+            //if the player has bezier points set, add them to player data
+            if ( playerSettings.BezierPointsSet() )
+            {
+                PlayerData.SetBezierPoints( playerSettings.BezierStart, playerSettings.BezierControlPoint1,
+                    playerSettings.BezierControlPoint2, playerSettings.BezierEnd );
+            }
+        }
+
     }
 
 }
