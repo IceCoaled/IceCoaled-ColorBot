@@ -255,19 +255,16 @@ namespace Recoil
     {
         private bool disposed;
 
-        internal List<PointF> Pattern { get; private set; }
-        internal double TotalTime { get; private set; }
+        internal Dictionary<PointF, double> Pattern { get; private set; }
 
-        public RecoilPattern( List<PointF> pattern, double totalTime )
+        public RecoilPattern( Dictionary<PointF, double> pattern )
         {
             this.Pattern = pattern;
-            this.TotalTime = totalTime;
         }
 
         public RecoilPattern()
         {
             this.Pattern = [];
-            this.TotalTime = 0;
         }
 
         /// <summary>
@@ -284,8 +281,7 @@ namespace Recoil
         public static RecoilPattern ReadFromFile( string filePath )
         {
             List<PointF> positions = new();
-            double firstTime = 0, lastTime = 0;
-            bool isFirstEntry = true;
+            List<double> timeOfPoint = new();
 
             using ( StreamReader reader = new( filePath ) )
             {
@@ -300,21 +296,25 @@ namespace Recoil
                         float y = float.Parse( parts[ 2 ] );
                         double time = double.Parse( parts[ 4 ] );
 
+                        // Add the position and time to the lists
                         positions.Add( new PointF( x, y ) );
+                        timeOfPoint.Add( time );
 
-                        // Capture the first and last time entries
-                        if ( isFirstEntry )
-                        {
-                            firstTime = time;
-                            isFirstEntry = false;
-                        }
-                        lastTime = time;
                     }
                 }
             }
 
-            double totalTime = lastTime - firstTime;
-            return new RecoilPattern( positions, totalTime );
+            // Create a dictionary to store the pattern
+            Dictionary<PointF, double> pattern = new();
+
+
+            // Add the positions and time to the pattern
+            for ( int i = 0; i < positions.Count; i++ )
+            {
+                pattern.Add( positions[ i ], timeOfPoint[ i ] );
+            }
+
+            return new RecoilPattern( pattern );
         }
 
         /// <summary>
@@ -325,34 +325,69 @@ namespace Recoil
             // Use the pattern with the least positions, to avoid out of range exceptions
             int length = patterns.Min( p => p.Pattern.Count );
 
-            List<PointF> averagedPattern = new( length );
+            Dictionary<PointF, double> averagedPattern = new();
 
             for ( int i = 0; i < length; i++ )
             {
-                float avgX = patterns.Select( pattern => pattern.Pattern[ i ].X ).Average();
-                float avgY = patterns.Select( pattern => pattern.Pattern[ i ].Y ).Average();
+                // Calculate the average X and Y positions, and corresponding time of the points
+                float avgX = patterns.Select( pattern => pattern[ i ].X ).Average();
+                float avgY = patterns.Select( pattern => pattern[ i ].Y ).Average();
+                double avgTime = patterns.Select( pattern => pattern.Pattern[ pattern[ i ] ] ).Average();
 
-                averagedPattern.Add( new PointF( avgX, avgY ) );
+
+                // Add the averaged position and time to the pattern
+                averagedPattern.Add( new PointF( avgX, avgY ), avgTime );
             }
 
-            return new RecoilPattern( averagedPattern, patterns.Select( pattern => pattern.TotalTime ).Average() );
+            return new RecoilPattern( averagedPattern );
         }
 
         /// <summary>
         /// Refactors the pattern based on the current game window size.
         /// </summary>
-        public RecoilPattern RefactorPatternForWindowSize( ref float scaleX, ref float scaleY )
+        internal RecoilPattern RefactorPatternForWindowSize( ref float scaleX, ref float scaleY )
         {
-            List<PointF> refactoredPattern = new();
+            Dictionary<PointF, double> refactoredPattern = new();
+
 
             foreach ( var position in Pattern )
             {
-                PointF scaledPosition = new( position.X * scaleX, position.Y * scaleY );
-                refactoredPattern.Add( scaledPosition );
+                // Scale the X and Y positions based on the window size
+                PointF scaledPosition = new( position.Key.X * scaleX, position.Key.Y * scaleY );
+                double time = position.Value;
+                refactoredPattern.Add( scaledPosition, time );
             }
 
-            return new RecoilPattern( refactoredPattern, TotalTime );
+            return new RecoilPattern( refactoredPattern );
         }
+
+
+        // Operator overload to acces specific PointF in the dictionary, based of time
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="time"></param>
+        /// <returns></returns>
+        /// <exception cref="KeyNotFoundException"></exception>
+        internal PointF this[ double time ]
+        {
+            // Get PointF based on time, with plus or minus 50milliseconds
+            get
+            {
+                var point = Pattern.FirstOrDefault( p => p.Value >= time - 50 && p.Value <= time + 50 );
+                if ( point.Key == default )
+                {
+                    ErrorHandler.HandleException( new KeyNotFoundException( "No point found for the given time" ) );
+                }
+
+                // Return default PointF if no point is found
+                return default;
+            }
+        }
+
+
+
 
 
         public void Dispose()
@@ -378,7 +413,7 @@ namespace Recoil
         private static Dictionary<string, RecoilPattern> patternDatabase = new();
 
         //original window size is static at 1440x2560       
-        private static PInvoke.RECT originalWindowRect = new() { left = 0, top = 0, right = 1440, bottom = 2560 };
+        private static PInvoke.RECT originalWindowRect = new() { left = 0, top = 0, right = 2560, bottom = 1440 };
         internal static PInvoke.RECT OriginalWindowRect { get => originalWindowRect; }
         internal static CancellationTokenSource RecoilPatternSource { get; set; } = new();
 
@@ -407,11 +442,15 @@ namespace Recoil
         {
             List<RecoilPattern> patterns = new();
 
-            for ( int i = 1; i <= 3; i++ )
+            for ( int i = 1; i < 4; i++ )
             {
                 string patternFile = Path.Combine( gunFolder, $"{Path.GetFileName( gunFolder )}-{i}.txt" );
                 RecoilPattern pattern = RecoilPattern.ReadFromFile( patternFile );
                 patterns.Add( pattern );
+
+#if DEBUG
+                Logger.Log( $"Processed pattern: {patternFile}" );
+#endif
             }
 
             RecoilPattern averagedPattern = RecoilPattern.AveragePatterns( patterns );
@@ -446,6 +485,10 @@ namespace Recoil
             foreach ( var gunName in patternDatabase.Keys.ToList() )
             {
                 patternDatabase[ gunName ] = patternDatabase[ gunName ].RefactorPatternForWindowSize( ref scaleX, ref scaleY );
+
+#if DEBUG
+                Logger.Log( $"Refactored: {gunName} recoil Pattern" );
+#endif
             }
         }
 
@@ -471,13 +514,8 @@ namespace Recoil
 
         internal static async Task RecoilPatternThread()
         {
-            nint hThread = WinApi.GetCurrentThread();
-            nint originalAffinity = WinApi.SetThreadAffinityMask( hThread, ( int ) ThreadAffinities.recoilManager );
-            if ( originalAffinity == 0 )
-            {
-                ErrorHandler.HandleException( new Exception( "Failed to set thread affinity mask" ) );
-            }
-
+            // Process all patterns and store them in the database
+            ProcessAllGunPatterns();
 
             List<string> CurrentAddedGuns = new()
             {
@@ -485,11 +523,22 @@ namespace Recoil
                 "CYCLONE", "M25 HORNET", "M49 FURY", "M67 REAVER", "WHISPER"
             };
 
-            string lastName = "";
-            PInvoke.RECT gameRect = PlayerData.GetRect();
-            ScreenCaptureOCR screenCaptureOCR = new( ref gameRect );
             int buyKey = Utils.MouseInput.VK_B;
             int escapeKey = Utils.MouseInput.VK_ESCAPE;
+            int backupKey = Utils.MouseInput.VK_F1;
+
+
+            // Wait for the game window to be detected
+            while ( PlayerData.GetHwnd() == nint.MaxValue )
+            {
+                Thread.Sleep( 5000 );
+            }
+
+
+            //setup OCR
+            PInvoke.RECT gameRect = PlayerData.GetRect();
+            ScreenCaptureOCR screenCaptureOCR = new( ref gameRect );
+
 
             // Refactor patterns if the game window has changed
             if ( gameRect.top != OriginalWindowRect.top ||
@@ -508,12 +557,45 @@ namespace Recoil
                     await HandleBuyState( escapeKey );
                     // Automatically check for weapon name change using OCR
                     string weaponName = screenCaptureOCR.PerformOCRForWeaponName();
-                    if ( weaponName != lastName )
+                    if ( !CurrentAddedGuns.Contains( weaponName ) )
                     {
-                        lastName = weaponName;
-                        CurrentPattern = CurrentAddedGuns.Contains( weaponName )
-                            ? GetRecoilPattern( weaponName )
-                            : GetRecoilPattern( "BLACKOUT" );  // Default to BLACKOUT
+                        CurrentPattern = GetRecoilPattern( "BLACKOUT" );  // Default to BLACKOUT
+#if DEBUG
+                        Logger.Log( $"Defaulted to BLACKOUT" );
+#else
+                        System.Media.SystemSounds.Question.Play();
+#endif
+                    } else
+                    {
+                        CurrentPattern = GetRecoilPattern( weaponName );
+#if DEBUG
+                        Logger.Log( $"Current weapon: {weaponName}" );
+#else
+                        System.Media.SystemSounds.Beep.Play();
+#endif 
+                    }
+                }
+
+                // If the scan doesnt pick up the weapon name, press F1 to try again
+                if ( Utils.MouseInput.IsKeyPressed( ref backupKey ) )
+                {
+                    string weaponName = screenCaptureOCR.PerformOCRForWeaponName();
+                    if ( !CurrentAddedGuns.Contains( weaponName ) )
+                    {
+                        CurrentPattern = GetRecoilPattern( "BLACKOUT" );  // Default to BLACKOUT
+#if DEBUG
+                        Logger.Log( $"Defaulted to BLACKOUT" );
+#else
+                        System.Media.SystemSounds.Question.Play();
+#endif
+                    } else
+                    {
+                        CurrentPattern = GetRecoilPattern( weaponName );
+#if DEBUG
+                        Logger.Log( $"Current weapon: {weaponName}" );
+#else
+                        System.Media.SystemSounds.Beep.Play();
+#endif 
                     }
                 }
 
@@ -531,8 +613,6 @@ namespace Recoil
             }
 
             screenCaptureOCR.Dispose();
-
-            WinApi.SetThreadAffinityMask( hThread, originalAffinity );
         }
 
 

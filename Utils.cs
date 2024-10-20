@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text.Json;
@@ -11,27 +12,10 @@ namespace Utils
 {
 
     /// <summary>
-    /// Enumeration of thread affinities for the application.
-    /// simply to keep things organized and avoid confusion.
-    /// </summary>
-    internal enum ThreadAffinities
-    {
-        aimbot,
-        triggerbot,
-        enemyScan,
-        recoilManager,
-        gameCheck,
-        uiQuickAccess,
-    }
-
-
-
-
-    /// <summary>
     /// files and folders used by the application.
     /// used for easy access to file paths and folder names.
     /// </summary>
-    internal struct FilesAndFolders
+    internal static class FilesAndFolders
     {
         //Folders
         internal const string configFolder = @"./config/";
@@ -52,22 +36,205 @@ namespace Utils
         internal const string exceptionLogFile = @"./debug/exceptionLog.txt";
 
         internal const string tessEngineFile = @"./tessdata/eng.traineddata";
+
+        internal static readonly string gameSettingsFile = Path.Combine( Environment.GetFolderPath( Environment.SpecialFolder.LocalApplicationData ), @"Spectre\Saved\Config\WindowsClient\GameUserSettings.ini" );
+
+
+        /// <summary>
+        /// function to download a gun recoil patterns repo if they downt exist
+        /// </summary>
+        /// <param name="urlPath"> url for the.txt file containing recoil info</param>
+        /// <param name="destinationPath">file destination to create and write to</param>
+        /// <returns></returns>
+        internal static async Task DownloadFile( string urlPath, string destinationPath )
+        {
+            FixUrl( ref urlPath );
+
+            using HttpClient client = new();
+
+            try
+            {
+                using HttpResponseMessage response = await client.GetAsync( urlPath, HttpCompletionOption.ResponseHeadersRead );
+                if ( response.IsSuccessStatusCode )
+                {
+                    await using Stream urlStream = await response.Content.ReadAsStreamAsync();
+
+                    await using FileStream fileStream = new( destinationPath, FileMode.Create, FileAccess.Write, FileShare.None );
+                    await urlStream.CopyToAsync( fileStream );
+
+#if DEBUG
+                    Logger.Log( $"Downloaded {urlPath} to {destinationPath}" );
+#endif
+
+                } else
+                {
+                    ErrorHandler.HandleException( new Exception( $"Failed to download {urlPath}" ) );
+                    // Program will exit if status code is not successful
+                }
+            } catch ( Exception ex )
+            {
+                ErrorHandler.HandleException( ex );
+                // Program will exit any exception is thrown
+            }
+        }
+
+
+        /// <summary>
+        /// function to fix the url to download the file as of right now, this is github specific. 
+        /// but can be modified with flags to check for other sites
+        /// </summary>
+        /// <param name="downloadUrl"></param>
+        private static void FixUrl( ref string downloadUrl )
+        {
+            //change spaces to "%20"
+
+            downloadUrl = downloadUrl.Replace( " ", "%20" );
+        }
+
+
+
+        internal static void GetInGameSettings()
+        {
+            /*
+             * these are the lines we are looking for in the settings file
+             * MouseSensitivityADSScale=1.000000
+             *MouseSensitivity=0.850000
+             */
+
+            using StreamReader reader = new( FilesAndFolders.gameSettingsFile );
+            string line;
+
+            while ( true )
+            {
+                line = reader.ReadLine();
+
+                if ( line == null )
+                {
+                    break;
+                }
+
+                line = line.Trim();
+
+                if ( line.StartsWith( "MouseSensitivityADSScale=" ) )
+                {
+                    string[] split = line.Split( '=' );
+                    string value = split[ 1 ];
+                    float.TryParse( value, out float result );
+
+#if DEBUG
+                    Logger.Log( $"MouseSensitivityADSScale: {result}" );
+#endif
+
+                    AimBot.AdsMultiplier = result;
+                } else if ( line.StartsWith( "MouseSensitivity=" ) )
+                {
+                    string[] split = line.Split( '=' );
+                    string value = split[ 1 ];
+                    float.TryParse( value, out float result );
+
+#if DEBUG
+                    Logger.Log( $"MouseSensitivity: {result}" );
+#endif
+
+                    AimBot.MouseSensitivity = result;
+                }
+            }
+
+
+            // Check if the settings were found
+
+            if ( AimBot.MouseSensitivity == 0 || AimBot.AdsMultiplier == 0 )
+            {
+                ErrorHandler.HandleException( new Exception( "Failed to get in game settings" ) );
+            }
+        }
+
+
+        internal static string GetFileMD5Hash( string fileName )
+        {
+            using System.Security.Cryptography.MD5 md5 = System.Security.Cryptography.MD5.Create();
+            using ( var stream = System.IO.File.OpenRead( fileName ) )
+            {
+                var hash = md5.ComputeHash( stream );
+                return BitConverter.ToString( hash ).Replace( "-", "" );
+            }
+        }
     }
 
 
 
 
-    internal class Mathf
+    /// <summary>
+    /// Represents a collection of points used to define a Bezier curve, including the start point, 
+    /// end point, and control points for the curve. This class allows for manipulation and computation 
+    /// of complex Bezier curves of varying degrees, facilitating smoother and more controlled aiming functions.
+    /// </summary>
+    /// <remarks>
+    /// The first point in the collection is the start point, and the last point is the end point. 
+    /// All other points in between are treated as control points, used to influence the shape of the curve.
+    /// </remarks>
+    /// <example>
+    /// Example usage:
+    /// <code>
+    /// BezierPointCollection bezierPoints = new BezierPointCollection(startPoint, endPoint, controlPoints);
+    /// var curvePoints = bezierPoints.GetCurvePoints();
+    /// </code>
+    /// </example>
+    internal class BezierPointCollection
     {
+        // Properties for the points
+        internal PointF Start { get; set; }
+        internal PointF End { get; set; }
+        internal List<PointF> ControlPoints { get; set; }
 
-        //internal interface INumericType { }
-        //internal struct Float : INumericType { }
-        //internal struct Double : INumericType { }
-        //internal struct Int : INumericType { }
-
-
-        internal static void ScaleControlPoints( ref PointF controlPoint1, ref PointF controlPoint2, ref PointF startPos, ref PointF targetPos, ref PointF userStart, ref PointF userEnd )
+        /// <summary>
+        /// Initializes a new instance of the <see cref="BezierPointCollection"/> class
+        /// with the specified start point, end point, and list of control points.
+        /// </summary>
+        /// <param name="start">The starting point of the Bezier curve.</param>
+        /// <param name="end">The ending point of the Bezier curve.</param>
+        /// <param name="controlPoints">A list of control points to define the curve.</param>
+        internal BezierPointCollection( PointF start, PointF end, List<PointF> controlPoints )
         {
+            Start = start;
+            End = end;
+            ControlPoints = controlPoints ?? new();
+        }
+
+
+        /// <summary>
+        /// Specifically used for user-selected control points. It scales the control points to the game's resolution.
+        /// </summary>
+        /// <param name="startPos">The start position in the game (center of screen).</param>
+        /// <param name="targetPos">The target position in the game.</param>
+        internal List<PointF> ScaleAndCalculate( ref PointF startPos, ref PointF targetPos, int numPoints )
+        {
+            // Scale the control points
+            ScaleControlPointsRecursive( ControlPoints, startPos, targetPos, Start, End, 0 );
+
+            // Update the start and end points to the startPos and targetPos
+            Start = startPos;
+            End = targetPos;
+
+            // Calculate the points along the curve
+            return CalculateOcticBezierPoints( numPoints );
+        }
+
+        /// <summary>
+        /// Recursively scales the control points of an octic Bezier curve based on the distance between user-defined points and game-defined points.
+        /// </summary>
+        /// <param name="controlPoints">The list of control points to be scaled.</param>
+        /// <param name="startPos">The start position of the curve in the game.</param>
+        /// <param name="targetPos">The target position of the curve in the game.</param>
+        /// <param name="userStart">The user-defined start position used for scaling.</param>
+        /// <param name="userEnd">The user-defined end position used for scaling.</param>
+        /// <param name="index">The current index of the control point being processed (default is 0).</param>
+        internal void ScaleControlPointsRecursive( List<PointF> controlPoints, PointF startPos,
+            PointF targetPos, PointF userStart, PointF userEnd, int index = 0 )
+        {
+            if ( index >= controlPoints.Count )
+                return; // Base case: no more points to scale
+
             // Calculate the distance between user start and end points
             float userDistanceX = Math.Abs( userEnd.X - userStart.X );
             float userDistanceY = Math.Abs( userEnd.Y - userStart.Y );
@@ -80,87 +247,104 @@ namespace Utils
             float scaleX = userDistanceX > 0 ? gameDistanceX / userDistanceX : 1.0f;
             float scaleY = userDistanceY > 0 ? gameDistanceY / userDistanceY : 1.0f;
 
-            // Scale the control points accordingly (we're using head-on scaling here)
-            controlPoint1.X = startPos.X + ( controlPoint1.X - userStart.X ) * scaleX;
-            controlPoint1.Y = startPos.Y + ( controlPoint1.Y - userStart.Y ) * scaleY;
+            // Scale the current control point
+            controlPoints[ index ] = new PointF(
+                startPos.X + ( controlPoints[ index ].X - userStart.X ) * scaleX,
+                startPos.Y + ( controlPoints[ index ].Y - userStart.Y ) * scaleY );
 
-            controlPoint2.X = startPos.X + ( controlPoint2.X - userStart.X ) * scaleX;
-            controlPoint2.Y = startPos.Y + ( controlPoint2.Y - userStart.Y ) * scaleY;
-        }
-
-        internal static float CalculateAngleBetweenVectors( PointF v1, PointF v2 )
-        {
-            // Calculate the dot product
-            float dotProduct = ( v1.X * v2.X + v1.Y * v2.Y );
-
-            // Calculate the magnitude (length) of the vectors
-            float magnitudeV1 = ( float ) Math.Sqrt( v1.X * v1.X + v1.Y * v1.Y );
-            float magnitudeV2 = ( float ) Math.Sqrt( v2.X * v2.X + v2.Y * v2.Y );
-
-            // Calculate the cosine of the angle
-            float cosTheta = dotProduct / ( magnitudeV1 * magnitudeV2 );
-
-            // Use arccos to find the angle in radians, then convert to degrees
-            return ( float ) ( Math.Acos( cosTheta ) * ( 180.0 / Math.PI ) );
+            // Recur for the next control point
+            ScaleControlPointsRecursive( controlPoints, startPos, targetPos, userStart, userEnd, index + 1 );
         }
 
 
-        internal static void EnforceControlPointAngle( ref PointF controlPoint1, ref PointF controlPoint2, PointF startPos, PointF targetPos )
+
+
+        /// <summary>
+        /// Calculates the points along an octic Bezier curve using the internal start, control, and end points.
+        /// </summary>
+        /// <param name="numPoints">Number of points to compute along the curve.</param>
+        /// <returns>A list of interpolated points on the Bezier curve.</returns>
+        internal List<PointF> CalculateOcticBezierPoints( int numPoints )
         {
-            // Calculate vectors from start to controlPoint1 and from controlPoint2 to end
-            PointF vector1 = new PointF( controlPoint1.X - startPos.X, controlPoint1.Y - startPos.Y );
-            PointF vector2 = new PointF( targetPos.X - controlPoint2.X, targetPos.Y - controlPoint2.Y );
+            // Ensure numPoints is at least 2 to create a curve
+            numPoints = Math.Max( numPoints, 2 );
 
-            // Calculate the angle between these two vectors
-            float angle = CalculateAngleBetweenVectors( vector1, vector2 );
+            List<PointF> bezierPoints = new( numPoints );
 
-            // If the angle exceeds 45 degrees, adjust control points
-            if ( angle > 45.0f )
+            // Create a list that includes start, control, and end points
+            List<PointF> allPoints = new();
+            allPoints.Capacity = ControlPoints.Count + 2;
+
+            // Add start point
+            allPoints.Add( Start );
+
+            // Add control points
+            allPoints.AddRange( ControlPoints );
+
+            // Add end point
+            allPoints.Add( End );
+
+            // Step size to divide the curve evenly between 0 and 1
+            float step = 1.0f / ( numPoints - 1 ); // Ensures that t reaches 1 exactly at the last point
+
+            // Pre-allocated point for the result
+            PointF result;
+
+            // Compute points along the curve using the recursive function
+            for ( int i = 0; i < numPoints; i++ )
             {
-                // Scale down the control points to limit the angle
-                float adjustmentFactor = 45.0f / angle;
+                float t = i * step;
 
-                // Adjust the control points based on the angle reduction factor
-                controlPoint1.X = startPos.X + ( controlPoint1.X - startPos.X ) * adjustmentFactor;
-                controlPoint1.Y = startPos.Y + ( controlPoint1.Y - startPos.Y ) * adjustmentFactor;
-
-                controlPoint2.X = targetPos.X + ( controlPoint2.X - targetPos.X ) * adjustmentFactor;
-                controlPoint2.Y = targetPos.Y + ( controlPoint2.Y - targetPos.Y ) * adjustmentFactor;
+                // Compute the point on the curve and add it to the result list
+                result = ComputeBezierRecursive( allPoints, allPoints.Count - 1, t );
+                bezierPoints.Add( result );
             }
+
+            return bezierPoints;
         }
 
 
 
         /// <summary>
-        /// Calculates the cubic Bezier curve interpolation at a given time using 4 control points.
+        /// Computes a point on an octic (8-point) Bezier curve at a given time using recursion.
         /// </summary>
-        /// <param name="time">The time parameter (0.0 to 1.0) representing the interpolation step.</param>
-        /// <param name="currentPos">The starting point of the curve.</param>
-        /// <param name="controlPoint1">The first control point, which influences the start of the curve.</param>
-        /// <param name="controlPoint2">The second control point, which influences the middle of the curve.</param>
-        /// <param name="controlPoint3">The third control point, which influences the end of the curve.</param>
-        /// <param name="targetPos">The end point of the curve.</param>
-        /// <returns>Returns the interpolated position (PointF) on the Bezier curve at the given time.</returns>
-        internal static PointF BezierCubicCalc( double time, ref PointF currentPos, ref PointF controlPoint1, ref PointF controlPoint2, ref PointF targetPos )
+        /// <param name="points">The array of control points, including start, internal, and end points.</param>
+        /// <param name="n">The number of control points minus 1 (i.e., the highest index).</param>
+        /// <param name="t">The interpolation factor, between 0 and 1.</param>
+        /// <returns>The interpolated point at time t on the curve.</returns>
+        private PointF ComputeBezierRecursive( List<PointF> points, int n, float t )
         {
-            float oneMinusT = ( float ) ( 1 - time );
+            // Base case: if there's only one point, return it
+            if ( n == 0 )
+            {
+                return points[ 0 ];
+            }
 
-            // Compute the X coordinate for the cubic Bezier curve
-            float x = ( float ) ( Math.Pow( oneMinusT, 3 ) * currentPos.X +
-                              3 * Math.Pow( oneMinusT, 2 ) * time * controlPoint1.X +
-                              3 * oneMinusT * Math.Pow( time, 2 ) * controlPoint2.X +
-                              Math.Pow( time, 3 ) * targetPos.X );
+            // Create a list for the next level of points
+            List<PointF> nextLevel = new();
+            nextLevel.Capacity = n;
 
-            // Compute the Y coordinate for the cubic Bezier curve
-            float y = ( float ) ( Math.Pow( oneMinusT, 3 ) * currentPos.Y +
-                              3 * Math.Pow( oneMinusT, 2 ) * time * controlPoint1.Y +
-                              3 * oneMinusT * Math.Pow( time, 2 ) * controlPoint2.Y +
-                              Math.Pow( time, 3 ) * targetPos.Y );
+            // Linear interpolation between each pair of points
+            for ( int i = 0; i < n; i++ )
+            {
+                PointF point = new()
+                {
+                    X = ( 1 - t ) * points[ i ].X + t * points[ i + 1 ].X,
+                    Y = ( 1 - t ) * points[ i ].Y + t * points[ i + 1 ].Y
+                };
+                nextLevel.Add( point );
+            }
 
-            // Return the calculated position on the Bezier curve
-            return new PointF( x, y );
+            // Recursively process the next level of points
+            return ComputeBezierRecursive( nextLevel, n - 1, t );
         }
+    }
 
+
+
+
+    internal static class Mathf
+    {
 
         /// <summary>
         /// Calculates the Euclidean distance between two points in 2D space.
@@ -171,13 +355,30 @@ namespace Utils
         /// <returns>Returns the distance between <paramref name="p1"/> and <paramref name="p2"/>.</returns>
         internal static T GetDistance<T>( ref PointF p1, ref PointF p2 ) where T : struct, IComparable<T>
         {
-            dynamic dx = ( dynamic ) p2.X - ( dynamic ) p1.X;
-            dynamic dy = ( dynamic ) p2.Y - ( dynamic ) p1.Y;
+            double dx = p2.X - p1.X;
+            double dy = p2.Y - p1.Y;
 
-            dynamic distanceSquared = dx * dx + dy * dy;
+            double distanceSquared = dx * dx + dy * dy;
+            double distance = Math.Sqrt( distanceSquared );
 
-            return ( T ) Convert.ChangeType( Math.Sqrt( ( double ) distanceSquared ), typeof( T ) );
+            // Convert the result to the desired type
+            if ( typeof( T ) == typeof( int ) )
+            {
+                return ( T ) ( object ) ( int ) Math.Round( distance );
+            } else if ( typeof( T ) == typeof( float ) )
+            {
+                return ( T ) ( object ) ( float ) distance;
+            } else if ( typeof( T ) == typeof( double ) )
+            {
+                return ( T ) ( object ) distance;
+            } else
+            {
+                ErrorHandler.HandleExceptionNonExit( new InvalidOperationException( $"Unsupported type {typeof( T )}." ) );
+            }
+
+            return default;
         }
+
 
 
 
@@ -277,6 +478,34 @@ namespace Utils
         internal static T InverseLerp<T>( T a, T b, T t ) where T : struct, IComparable<T>
         {
             return ( T ) Convert.ChangeType( 1.0 / ( ( dynamic ) a + ( ( dynamic ) b - ( dynamic ) a ) * Clamp01( t ) ), typeof( T ) );
+        }
+
+
+
+        /// <summary>
+        /// Performs inverse linear interpolation between two values unclamped.
+        /// </summary>
+        /// <param name="a">The start value.</param>
+        /// <param name="b">The end value.</param>
+        /// <param name="t">The interpolation factor (typically between 0 and 1).</param>
+        /// <returns></returns>
+        internal static T LerpUnclamped<T>( float a, float b, float t ) where T : struct, IComparable<T>
+        {
+            return ( T ) Convert.ChangeType( ( dynamic ) a + ( ( dynamic ) b - ( dynamic ) a ) * t, typeof( T ) );
+        }
+
+
+        /// <summary>
+        /// Performs inverse linear interpolation between two values. unclamped.
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="a">The start value.</param>
+        /// <param name="b">The end value.</param>
+        /// <param name="t">The interpolation factor (typically between 0 and 1).</param>
+        /// <returns></returns>
+        internal static T InverseLerpUnclamped<T>( T a, T b, T t ) where T : struct, IComparable<T>
+        {
+            return ( T ) Convert.ChangeType( 1.0 / ( ( dynamic ) a + ( ( dynamic ) b - ( dynamic ) a ) * t ), typeof( T ) );
         }
 
 
@@ -466,6 +695,11 @@ namespace Utils
             captureWatch = Stopwatch.StartNew();
         }
 
+        internal static void StopCaptureWatch()
+        {
+            captureWatch!.Stop();
+        }
+
 
         /// <summary>
         /// returns the time elapsed since the stopwatch was started.
@@ -485,9 +719,9 @@ namespace Utils
         /// <param name="microSeconds">The number of microseconds to sleep.</param>
         internal static void MicroSleep( double microSeconds )
         {
+            Stopwatch sleepStopWatch = Stopwatch.StartNew();
             SpinWait spinWait = new SpinWait();
             long ticks = ( long ) ( microSeconds * Stopwatch.Frequency / 1000000 );
-            Stopwatch sleepStopWatch = Stopwatch.StartNew();
             while ( sleepStopWatch.ElapsedTicks < ticks )
             {
                 spinWait.SpinOnce();
@@ -623,6 +857,7 @@ namespace Utils
 
     internal static class MouseInput
     {
+
         /// <summary>
         /// Checks whether a specified key is held down.
         /// </summary>
@@ -796,6 +1031,17 @@ namespace Utils
             public nint ExtraInfo;
         }
 
+        [StructLayout( LayoutKind.Sequential )]
+        internal struct MOUSEMOVEPOINT
+        {
+            public int X;
+            public int Y;
+            public uint Time;
+            public nint ExtraInfo;
+        }
+
+
+
         internal const int VK_LBUTTON = 0x01, VK_RBUTTON = 0x02, VK_MBUTTON = 0x04, VK_XBUTTON1 = 0x05, VK_XBUTTON2 = 0x06;
         internal const int VK_INSERT = 0x2D, VK_DELETE = 0x2E, VK_HOME = 0x24, VK_END = 0x23, VK_PRIOR = 0x21, VK_NEXT = 0x22;
         internal const int VK_LEFT = 0x25, VK_UP = 0x26, VK_RIGHT = 0x27, VK_DOWN = 0x28;
@@ -830,6 +1076,9 @@ namespace Utils
 
         [DllImport( "user32.dll" )]
         public static extern void SetCursorPos( int x, int y );
+
+        [DllImport( "user32.dll" )]
+        public static extern int GetMouseMovePointsEx( uint cbSize, ref MOUSEMOVEPOINT lppt, [Out] MOUSEMOVEPOINT[] lpptBuf, int nBufPoints, uint resolution );
     }
 
 
@@ -837,13 +1086,6 @@ namespace Utils
     {
         internal static void UiSmartKey( NotifyIcon trayIcon, IceColorBot mainClass, CancellationTokenSource formClose )
         {
-            nint hThread = WinApi.GetCurrentThread();
-            nint originalAffinity = WinApi.SetThreadAffinityMask( hThread, ( int ) ThreadAffinities.uiQuickAccess );
-            if ( originalAffinity == 0 )
-            {
-                ErrorHandler.HandleException( new Exception( "Error setting thread affinity" ) );
-            }
-
             int insert = MouseInput.VK_INSERT;
             bool isKeyPressed = false;
 
@@ -887,22 +1129,16 @@ namespace Utils
                 // Small delay to prevent high CPU usage
                 Thread.Sleep( 10 );
             }
-
-            WinApi.SetThreadAffinityMask( hThread, originalAffinity );
         }
 
 
 
         internal static void SmartGameCheck( ref CancellationTokenSource formClose )
         {
-            nint hThread = WinApi.GetCurrentThread();
-            nint originalAffinity = WinApi.SetThreadAffinityMask( hThread, ( int ) ThreadAffinities.gameCheck );
-            if ( originalAffinity == 0 )
-            {
-                ErrorHandler.HandleException( new Exception( "Error setting thread affinity" ) );
-            }
-
-
+            string gameSettingsMD5 = FilesAndFolders.GetFileMD5Hash( FilesAndFolders.gameSettingsFile );
+#if DEBUG
+            Logger.Log( $"Smart Game Check Thread Started, File Hash: {gameSettingsMD5}" );
+#endif
 
             PInvoke.RECT rect = new();
             nint firstHwnd;
@@ -930,6 +1166,20 @@ namespace Utils
 #endif
                             }
                         }
+                    }
+
+
+                    // check if player changed settings, if so, reload settings
+                    string gameSettingsMD5New = FilesAndFolders.GetFileMD5Hash( FilesAndFolders.gameSettingsFile );
+                    if ( gameSettingsMD5New != gameSettingsMD5 )
+                    {
+                        gameSettingsMD5 = gameSettingsMD5New;
+                        FilesAndFolders.GetInGameSettings();
+#if DEBUG
+                        Logger.Log( "Game Settings Changed" );
+                        Logger.Log( $"New Game Settings File Hash: {gameSettingsMD5}" );
+#endif
+
                     }
 
                     continue;
@@ -962,176 +1212,465 @@ namespace Utils
 #endif
                 }
             }
-
-            WinApi.SetThreadAffinityMask( hThread, originalAffinity );
         }
     }
 
 
     /// <summary>
-    /// class for saving and loading config files.
+    /// Class for saving and loading player config files.
     /// </summary>
     internal static class PlayerConfigs
     {
-        internal struct Settings
-        {
-            internal double AimSpeed { get; set; }
-            internal double AimSmoothing { get; set; }
-            internal int AimFov { get; set; }
-            internal int Deadzone { get; set; }
-            internal bool Predication { get; set; }
-            internal bool AntiRecoil { get; set; }
-            internal int AimKey { get; set; }
-            internal AimLocation Location { get; set; }
-            internal string? ColorSelected { get; set; }
-            internal PointF BezierStart { get; set; }
-            internal PointF BezierControlPoint1 { get; set; }
-            internal PointF BezierControlPoint2 { get; set; }
-            internal PointF BezierEnd { get; set; }
-
-            internal Settings( double aimSpeed, double aimSmoothing,
-                int aimFov, int deadzone, bool predication,
-                bool antiRecoil, int aimKey, AimLocation aimLocation,
-                string colorSelected )
-            {
-                AimSpeed = aimSpeed;
-                AimSmoothing = aimSmoothing;
-                AimFov = aimFov;
-                Deadzone = deadzone;
-                Predication = predication;
-                AntiRecoil = antiRecoil;
-                AimKey = aimKey;
-                Location = aimLocation;
-                ColorSelected = colorSelected;
-            }
-
-            internal void SetBezierPoints( PointF start, PointF control1, PointF control2, PointF end )
-            {
-                BezierStart = start;
-                BezierControlPoint1 = control1;
-                BezierControlPoint2 = control2;
-                BezierEnd = end;
-            }
-
-            internal bool BezierPointsSet()
-            {
-                return BezierStart != PointF.Empty && BezierControlPoint1 != PointF.Empty &&
-                    BezierControlPoint2 != PointF.Empty && BezierEnd != PointF.Empty;
-            }
-        }
+        public delegate void SettingsLoadedHandler( Dictionary<string, object?>? settings );
+        public static event SettingsLoadedHandler OnSettingsLoaded;
 
 
 
         /// <summary>
-        /// saves the current config to a .json file.
+        /// Saves the current config to a .json file.
         /// </summary>
         internal static void SaveConfig( int configNum )
         {
-            //create a new json serializer options object
-            var options = new JsonSerializerOptions
+            // Create a new json serializer options object with WriteIndented enabled
+            JsonSerializerOptions options = new()
             {
                 WriteIndented = true,
-                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+                PropertyNameCaseInsensitive = true,
+                Converters = { new ColorToleranceConverter(), new BezierPointCollectionConverter(), new RangeConverter<int>() }
             };
 
-            //get the current player settings
-            Settings settings = GetPlayerSettings();
+            // Create blob of player data           
+            Type? playerDataBlob = typeof( PlayerData );
 
+            // Get all the fields in the player data blob
+            Dictionary<string, object?>? blobFields = null;
+            try
+            {
+                blobFields = playerDataBlob
+                 .GetFields( BindingFlags.Static | BindingFlags.NonPublic )
+                 .Where( x => x.FieldType != typeof( IntPtr ) && x.FieldType != typeof( object ) ) // Filter out unsupported types
+                 .ToDictionary( x => x.Name, x => x.GetValue( null ) );
 
-            //serialize the settings object to a json string
-            string jsonString = JsonSerializer.Serialize( settings, options );
+            } catch ( Exception ex )
+            {
+                ErrorHandler.HandleExceptionNonExit( ex );
+                return;
+            }
 
-            //write the json string to a file
-            File.WriteAllText( $"config{configNum}.json", jsonString );
+            // Serialize the blob fields to a json string
+            var jsonString = JsonSerializer.Serialize( blobFields, options );
+
+            if ( jsonString == null )
+            {
+                ErrorHandler.HandleExceptionNonExit( new InvalidOperationException( "Failed to serialize settings." ) );
+                return;
+            }
+
+            // Write the json string to a config file
+            File.WriteAllText( FilesAndFolders.configFolder + $"config{configNum}.json", jsonString );
         }
 
 
 
         /// <summary>
-        /// loads a config file and applies the settings to the player.
+        /// Loads a config file and applies the settings to the player.
         /// </summary>
-        /// <param name="configNum"></param>
-        /// <param name="aimBot"></param>
         internal static void LoadConfig( int configNum )
         {
-            //read the json string from the file
-            string jsonString = File.ReadAllText( $"config{configNum}.json" );
+            // Read the json string from the file
+            string? jsonString = File.ReadAllText( FilesAndFolders.configFolder + $"config{configNum}.json" );
 
-            //deserialize the json string to a settings object
-            Settings settings = JsonSerializer.Deserialize<Settings>( jsonString );
+            if ( jsonString == null )
+            {
+                ErrorHandler.HandleExceptionNonExit( new InvalidOperationException( "Failed to read config file." ) );
+                return;
+            }
 
-            //set the player settings
-            SetPlayerSettings( ref settings );
-        }
+            // Create a json serializer options object with the custom converter
+            JsonSerializerOptions options = new()
+            {
+                WriteIndented = true,
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+                PropertyNameCaseInsensitive = true,
+                Converters = { new ColorToleranceConverter(), new BezierPointCollectionConverter(), new RangeConverter<int>() }
+            };
+
+            // Deserialize the json string to a settings object           
+            Dictionary<string, object?>? settings = null;
+
+            try
+            {
+                settings = JsonSerializer.Deserialize<Dictionary<string, object?>?>( jsonString, options );
+            } catch ( Exception ex )
+            {
+                ErrorHandler.HandleExceptionNonExit( ex );
+                return;
+            }
+
+            // Get the player data blob
+            Type? playerDataBlob = typeof( PlayerData );
+
+            //saving the color tolerance and name to set after all settings are loaded
+            ColorTolerance colorTolerance = new( 0, 0, 0, 0, 0, 0 );
+            string colorToleranceName = "Default";
 
 
+            // Loop through the settings and set the fields in the player data blob
+            foreach ( var setting in settings! )
+            {
+                FieldInfo? field = playerDataBlob.GetField( setting.Key, BindingFlags.Static | BindingFlags.NonPublic );
 
-        /// <summary>
-        /// Gets the current player settings.
-        /// </summary>
-        /// <returns></returns>
-        private static Settings GetPlayerSettings()
-        {
+                if ( field == null )
+                {
+                    ErrorHandler.HandleExceptionNonExit( new InvalidOperationException( "Failed to get field." ) );
+                    continue;
+                }
 
-            //get player aim settings
+                if ( setting.Value == null )
+                {
+                    continue;
+                }
+
+                if ( setting.Key == "localBezierCollection" && setting.Value is JsonElement bezierCollectionJson )
+                {
+                    Utils.BezierPointCollection? bezierCollection = JsonSerializer.Deserialize<Utils.BezierPointCollection>( bezierCollectionJson.GetRawText(), options );
+
+                    if ( PlayerData.BezierControlPointsSet() )
+                    {
+                        PlayerData.SetBezierPoints( bezierCollection! );
+                    }
+
+                    continue;
+                }
+
+                if ( setting.Key == "localColorTolerance" && setting.Value is JsonElement colorToleranceJson )
+                {
+                    colorTolerance = JsonSerializer.Deserialize<ColorTolerance>( colorToleranceJson.GetRawText(), options )!;
+                    continue;
+                }
+
+                // Other field handling logic for different field types
+                if ( setting.Value is JsonElement jsonElement )
+                {
+                    object? nonJsonVar = null;
+
+                    if ( field.FieldType == typeof( double ) )
+                    {
+                        nonJsonVar = jsonElement.GetDouble();
+                    } else if ( field.FieldType == typeof( int ) )
+                    {
+                        nonJsonVar = jsonElement.GetInt32();
+                    } else if ( field.FieldType == typeof( bool ) )
+                    {
+                        nonJsonVar = jsonElement.GetBoolean();
+                    } else if ( field.FieldType == typeof( string ) )
+                    {
+                        nonJsonVar = jsonElement.GetString();
+
+                        if ( setting.Key == "localColorToleranceName" && nonJsonVar is string toleranceName )
+                        {
+                            colorToleranceName = toleranceName;
+                        }
+                    }
+
+                    field.SetValue( null, nonJsonVar );
+                } else
+                {
+                    field.SetValue( null, setting.Value );
+                }
+            }
+
+            // Set the color tolerance
+            PlayerData.SetColorTolerance( colorTolerance, colorToleranceName );
+
+
+            // Just for debugging purposes
+#if DEBUG
             var aimSettings = PlayerData.GetAimSettings();
+            var aimFov = PlayerData.GetAimFov();
 
-            //get player color settings
-            string colorSetting = ColorTolerances.GetColorName( PlayerData.GetColorTolerance() );
+            //print all player data fields
+            Logger.Log( "Player Data Fields:" );
+            Logger.Log( "-------------------" );
+            Logger.Log( "Aim Speed: " + aimSettings.aimSpeed );
+            Logger.Log( "Aim Smoothing: " + aimSettings.aimSmoothing );
+            Logger.Log( "Deadzone: " + aimSettings.deadzone );
+            Logger.Log( "Aim Key: " + aimSettings.aimKey );
+            if ( aimSettings.prediction )
+            {
+                Logger.Log( "Prediction: Enabled" );
+            } else
+            {
+                Logger.Log( "Prediction: Disabled" );
+            }
 
-            //get player fov
-            int aimFov = PlayerData.GetAimFov();
+            if ( aimSettings.antiRecoil )
+            {
+                Logger.Log( "Anti Recoil: Enabled" );
+            } else
+            {
+                Logger.Log( "Anti Recoil: Disabled" );
+            }
 
-            //create a new settings object
-            Settings settings = new( aimSettings.aimSpeed, aimSettings.aimSmoothing, aimFov,
-               aimSettings.deadzone, aimSettings.prediction, aimSettings.antiRecoil,
-               aimSettings.aimKey, aimSettings.location, colorSetting );
+            Logger.Log( "Aim Fov: " + aimFov );
 
-            //if the player has bezier points set, add them to the settings object
+            Logger.Log( "-------------------" );
+            Logger.Log( "Color Tolerance: " + PlayerData.GetColorToleranceName() );
+
+            ColorTolerance debugTolerance = PlayerData.GetColorTolerance();
+
+            Logger.Log( "Red Min: " + debugTolerance.Red.Minimum );
+            Logger.Log( "Red Max: " + debugTolerance.Red.Maximum );
+
+            Logger.Log( "Green Min: " + debugTolerance.Green.Minimum );
+            Logger.Log( "Green Max: " + debugTolerance.Green.Maximum );
+
+            Logger.Log( "Blue Min: " + debugTolerance.Blue.Minimum );
+            Logger.Log( "Blue Max: " + debugTolerance.Blue.Maximum );
+
+            Logger.Log( "-------------------" );
+
             if ( PlayerData.BezierControlPointsSet() )
             {
-                var bezierSettings = PlayerData.GetBezierPoints();
-                settings.SetBezierPoints( bezierSettings.start, bezierSettings.control1, bezierSettings.control2, bezierSettings.end );
+                Logger.Log( "Bezier Control Points Set" );
+
+                Utils.BezierPointCollection debugTest = PlayerData.GetBezierPoints();
+
+                foreach ( var point in debugTest.ControlPoints )
+                {
+                    Logger.Log( $"Control Point: {point.X}, {point.Y}" );
+                }
+
+                Logger.Log( $"Start Point: {debugTest.Start.X}, {debugTest.Start.Y}" );
+                Logger.Log( $"End Point: {debugTest.End.X}, {debugTest.End.Y}" );
+            } else
+            {
+                Logger.Log( "Bezier Control Points Not Set" );
             }
 
-            return settings;
+#endif
+
+            // Invoke the settings loaded event, to set the main form controls
+            OnSettingsLoaded?.Invoke( settings );
         }
 
 
 
         /// <summary>
-        /// sets the player settings to player data.
+        /// Custom JSON converter for serializing and deserializing BezierPointCollection objects.
         /// </summary>
-        /// <param name="playerSettings"></param>
-        /// <param name="aimBot"></param>
-        private static void SetPlayerSettings( ref Settings playerSettings )
+        public class BezierPointCollectionConverter : JsonConverter<Utils.BezierPointCollection>
         {
-            //set the aim fov
-            PlayerData.SetAimFov( playerSettings.AimFov );
-
-            //set the aim settings
-            PlayerData.SetPrediction( playerSettings.Predication );
-            PlayerData.SetAntiRecoil( playerSettings.AntiRecoil );
-            PlayerData.SetAimKey( playerSettings.AimKey );
-            PlayerData.SetAimSpeed( playerSettings.AimSpeed );
-            PlayerData.SetAimSmoothing( playerSettings.AimSmoothing );
-            PlayerData.SetDeadzone( playerSettings.Deadzone );
-            PlayerData.SetAimLocation( playerSettings.Location );
-
-            //set the color tolerance
-            if ( playerSettings.ColorSelected != null )
+            /// <summary>
+            /// Reads and converts the JSON to a BezierPointCollection object.
+            /// </summary>
+            /// <param name="reader">The Utf8JsonReader to read the JSON from.</param>
+            /// <param name="typeToConvert">The type of object being converted.</param>
+            /// <param name="options">Options for customizing JSON serialization.</param>
+            /// <returns>A BezierPointCollection object.</returns>
+            public override Utils.BezierPointCollection Read( ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options )
             {
-                PlayerData.SetColorTolerance( playerSettings.ColorSelected );
+                // Deserialize JSON into a list of PointF objects representing the bezier points.
+                List<PointF>? points = JsonSerializer.Deserialize<List<PointF>>( ref reader, options );
+
+                // Error handling if points are null or insufficient to form a Bezier curve.
+                if ( points == null || points.Count < 2 )
+                {
+                    ErrorHandler.HandleException( new JsonException( "Invalid BezierPointCollection data." ) );
+                }
+
+                // The first and last points represent the start and end points of the curve.
+                PointF start = points.First();
+                PointF end = points.Last();
+
+                // All intermediate points represent control points for the Bezier curve.
+                var controlPoints = points.Skip( 1 ).Take( points.Count - 2 ).ToList();
+
+                return new Utils.BezierPointCollection( start, end, controlPoints );
             }
 
-            //if the player has bezier points set, add them to player data
-            if ( playerSettings.BezierPointsSet() )
+            /// <summary>
+            /// Writes the BezierPointCollection object to JSON format.
+            /// </summary>
+            /// <param name="writer">The Utf8JsonWriter to write the JSON to.</param>
+            /// <param name="value">The BezierPointCollection object to serialize.</param>
+            /// <param name="options">Options for customizing JSON serialization.</param>
+            public override void Write( Utf8JsonWriter writer, Utils.BezierPointCollection value, JsonSerializerOptions options )
             {
-                PlayerData.SetBezierPoints( playerSettings.BezierStart, playerSettings.BezierControlPoint1,
-                    playerSettings.BezierControlPoint2, playerSettings.BezierEnd );
+                // Combine start, control, and end points into a single list for serialization.
+                List<PointF>? allPoints = new()
+                { value.Start };
+                allPoints.AddRange( value.ControlPoints );
+                allPoints.Add( value.End );
+
+                // Serialize the points list as JSON.
+                JsonSerializer.Serialize( writer, allPoints, options );
             }
         }
 
-    }
+        /// <summary>
+        /// Custom JSON converter for serializing and deserializing ColorTolerance objects.
+        /// </summary>
+        public class ColorToleranceConverter : JsonConverter<ColorTolerance>
+        {
+            /// <summary>
+            /// Reads and converts the JSON to a ColorTolerance object.
+            /// </summary>
+            /// <param name="reader">The Utf8JsonReader to read the JSON from.</param>
+            /// <param name="typeToConvert">The type of object being converted.</param>
+            /// <param name="options">Options for customizing JSON serialization.</param>
+            /// <returns>A ColorTolerance object.</returns>
+            public override ColorTolerance Read( ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options )
+            {
+                try
+                {
+                    // Deserialize JSON into a dictionary with color ranges
+                    Dictionary<string, Dictionary<string, int>>? colorData = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, int>>>( ref reader, options );
 
+                    // Error handling if the deserialized data is invalid or missing required fields
+                    if ( colorData == null || !colorData.ContainsKey( "Red" ) || !colorData.ContainsKey( "Green" ) || !colorData.ContainsKey( "Blue" ) )
+                    {
+                        ErrorHandler.HandleException( new JsonException( "Invalid ColorTolerance data. Missing 'Red', 'Green', or 'Blue' fields." ) );
+                        return null; // Return null to handle gracefully
+                    }
+
+                    // Extract the min/max values for each RGB color channel
+                    var redRange = new Range<int>
+                    {
+                        Minimum = colorData[ "Red" ][ "Min" ],
+                        Maximum = colorData[ "Red" ][ "Max" ]
+                    };
+
+                    var greenRange = new Range<int>
+                    {
+                        Minimum = colorData[ "Green" ][ "Min" ],
+                        Maximum = colorData[ "Green" ][ "Max" ]
+                    };
+
+                    var blueRange = new Range<int>
+                    {
+                        Minimum = colorData[ "Blue" ][ "Min" ],
+                        Maximum = colorData[ "Blue" ][ "Max" ]
+                    };
+
+                    return new ColorTolerance( redRange.Minimum, redRange.Maximum, greenRange.Minimum, greenRange.Maximum, blueRange.Minimum, blueRange.Maximum );
+                } catch ( Exception ex )
+                {
+                    // Handle exceptions during the deserialization process
+                    ErrorHandler.HandleException( ex );
+                    return null; // Return a null or default value to prevent crashing
+                }
+            }
+
+            /// <summary>
+            /// Writes the ColorTolerance object to JSON format.
+            /// </summary>
+            /// <param name="writer">The Utf8JsonWriter to write the JSON to.</param>
+            /// <param name="value">The ColorTolerance object to serialize.</param>
+            /// <param="options">Options for customizing JSON serialization.</param>
+            public override void Write( Utf8JsonWriter writer, ColorTolerance value, JsonSerializerOptions options )
+            {
+                try
+                {
+                    // Prepare the color channel ranges for serialization
+                    Dictionary<string, Dictionary<string, int>> colorData = new()
+            {
+                { "Red", new Dictionary<string, int> { { "Min", value.Red.Minimum }, { "Max", value.Red.Maximum } } },
+                { "Green", new Dictionary<string, int> { { "Min", value.Green.Minimum }, { "Max", value.Green.Maximum } } },
+                { "Blue", new Dictionary<string, int> { { "Min", value.Blue.Minimum }, { "Max", value.Blue.Maximum } } }
+            };
+
+                    // Serialize the color tolerance ranges as JSON
+                    JsonSerializer.Serialize( writer, colorData, options );
+                } catch ( Exception ex )
+                {
+                    // Handle exceptions during the serialization process
+                    ErrorHandler.HandleException( ex );
+                }
+            }
+        }
+
+
+
+        /// <summary>
+        /// Custom JSON converter for serializing and deserializing Range objects.
+        /// </summary>
+        /// <typeparam name="T">The numeric type for the range (e.g., int, float).</typeparam>
+        public class RangeConverter<T> : JsonConverter<Range<T>> where T : IComparable<T>
+        {
+            /// <summary>
+            /// Reads and converts the JSON to a Range object.
+            /// </summary>
+            /// <param name="reader">The Utf8JsonReader to read the JSON from.</param>
+            /// <param name="typeToConvert">The type of object being converted.</param>
+            /// <param name="options">Options for customizing JSON serialization.</param>
+            /// <returns>A Range object.</returns>
+            public override Range<T> Read( ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options )
+            {
+                try
+                {
+                    // Deserialize JSON into a dictionary with min/max values
+                    Dictionary<string, T>? rangeData = JsonSerializer.Deserialize<Dictionary<string, T>>( ref reader, options );
+
+                    // Error handling if the deserialized data is invalid or missing required fields
+                    if ( rangeData == null || !rangeData.ContainsKey( "Minimum" ) || !rangeData.ContainsKey( "Maximum" ) )
+                    {
+                        ErrorHandler.HandleException( new JsonException( "Invalid Range data. Missing required 'Minimum' or 'Maximum' values." ) );
+                        return null; // Return null to handle gracefully
+                    }
+
+                    // Extract the minimum and maximum values
+                    T min = rangeData[ "Minimum" ];
+                    T max = rangeData[ "Maximum" ];
+
+                    // Create and return the Range object
+                    Range<T> range = new Range<T> { Minimum = min, Maximum = max };
+
+                    // Validate that the range is valid (minimum <= maximum)
+                    if ( !range.IsValid() )
+                    {
+                        ErrorHandler.HandleException( new JsonException( "Invalid Range. 'Minimum' value is greater than 'Maximum'." ) );
+                        return null;
+                    }
+
+                    return range;
+                } catch ( Exception ex )
+                {
+                    // Handle exceptions during the deserialization process
+                    ErrorHandler.HandleException( ex );
+                    return null; // Return a null or default value to prevent crashing
+                }
+            }
+
+            /// <summary>
+            /// Writes the Range object to JSON format.
+            /// </summary>
+            /// <param name="writer">The Utf8JsonWriter to write the JSON to.</param>
+            /// <param name="value">The Range object to serialize.</param>
+            /// <param name="options">Options for customizing JSON serialization.</param>
+            public override void Write( Utf8JsonWriter writer, Range<T> value, JsonSerializerOptions options )
+            {
+                try
+                {
+                    // Prepare the min/max values for serialization
+                    Dictionary<string, T> rangeData = new()
+            {
+                { "Minimum", value.Minimum },
+                { "Maximum", value.Maximum }
+            };
+
+                    // Serialize the Range as JSON
+                    JsonSerializer.Serialize( writer, rangeData, options );
+                } catch ( Exception ex )
+                {
+                    // Handle exceptions during the serialization process
+                    ErrorHandler.HandleException( ex );
+                }
+            }
+        }
+
+
+
+    }
 }

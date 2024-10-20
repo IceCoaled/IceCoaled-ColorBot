@@ -1,4 +1,5 @@
-﻿using Utils;
+﻿using System.Diagnostics.CodeAnalysis;
+using Utils;
 
 
 
@@ -20,15 +21,12 @@ namespace SCB
         private static bool localPrediction = false;
         private static nint localHWnd = nint.MaxValue;
         private static PInvoke.RECT localRect = new();
-        private static ColorTolerance? localColorTolerance = null;
-        private static ColorTolerance? localTanCarrier;
-        private static ColorTolerance? localBrownCarrier;
+        private static string localColorToleranceName = "";
+        private static ColorTolerance localColorTolerance = new( 0, 0, 0, 0, 0, 0 );
         private static AimLocation localAimLocation;
-        private static PointF bezierStartPoint = new();
-        private static PointF bezierControlPoint1 = new();
-        private static PointF bezierControlPoint2 = new();
-        private static PointF bezierEndPoint = new();
-        private static bool bezierControlPointsSet = false;
+        private static bool localBezierControlPointsSet = false;
+        private static Utils.BezierPointCollection localBezierCollection = new( new PointF(), new PointF(), new List<PointF>() );
+
 
         /// <summary>
         /// Unified method to handle thread-safe access and updates to AimBot settings.
@@ -95,6 +93,7 @@ namespace SCB
             lock ( locker )
             {
                 localAimFov = aimFov;
+                ScreenCap.AimFov = aimFov;
             }
         }
 
@@ -131,8 +130,6 @@ namespace SCB
                     AimBot.AimKey = aimKey;
                 }
             } );
-
-            ErrorHandler.PrintToStatusBar( $"Aim Key: {aimKey}" );
         }
 
         /// <summary>
@@ -195,34 +192,31 @@ namespace SCB
         /// <summary>
         /// Sets the Bezier curve control points for aim interpolation.
         /// </summary>
-        internal static void SetBezierPoints( PointF startPoint, PointF controlPoint1, PointF controlPoint2, PointF endPoint )
+        internal static void SetBezierPoints( Utils.BezierPointCollection bezierPoints )
         {
             lock ( locker )
             {
-                bezierStartPoint = startPoint;
-                bezierControlPoint1 = controlPoint1;
-                bezierControlPoint2 = controlPoint2;
-                bezierEndPoint = endPoint;
-                bezierControlPointsSet = true;
+                localBezierCollection = bezierPoints;
+                localBezierControlPointsSet = true;
             }
         }
 
         /// <summary>
         /// Gets the Bezier control points for aim interpolation.
         /// </summary>
-        internal static (PointF start, PointF control1, PointF control2, PointF end) GetBezierPoints()
+        internal static Utils.BezierPointCollection GetBezierPoints()
         {
             lock ( locker )
             {
-                if ( bezierControlPointsSet )
+                if ( localBezierControlPointsSet )
                 {
-                    return (bezierStartPoint, bezierControlPoint1, bezierControlPoint2, bezierEndPoint);
+                    return localBezierCollection;
                 }
                 ErrorHandler.HandleException( new Exception( "Bezier control points not set" ) );
             }
 
             // This line should never be reached, but the compiler requires a return value.
-            return (bezierStartPoint, bezierControlPoint1, bezierControlPoint2, bezierEndPoint);
+            return localBezierCollection;
         }
 
 
@@ -233,7 +227,7 @@ namespace SCB
         {
             lock ( locker )
             {
-                return bezierControlPointsSet;
+                return localBezierControlPointsSet;
             }
         }
 
@@ -242,20 +236,23 @@ namespace SCB
         /// </summary>
         internal static void SetColorTolerance( string userSelected )
         {
-            const string bPC = "brownPlateCarrier";
-            const string tPC = "tanPlateCarrier";
             lock ( locker )
             {
-                if ( localColorTolerance == null )
-                {
-                    localColorTolerance = ColorTolerances.GetColorTolerance( userSelected );
-                    localTanCarrier = ColorTolerances.GetColorTolerance( tPC );
-                    localBrownCarrier = ColorTolerances.GetColorTolerance( bPC );
-                } else
-                {
-                    localColorTolerance = ColorTolerances.GetColorTolerance( userSelected );
-                }
+                localColorTolerance = ColorTolerances.GetColorTolerance( userSelected );
+                localColorToleranceName = userSelected;
+            }
+        }
 
+        ///<summary>
+        /// Sets color tolerance from another color tolerance.
+        /// this is specifically for config loading.
+        ///</summary>
+        internal static void SetColorTolerance( ColorTolerance colorTolerance, string colorToleranceName )
+        {
+            lock ( locker )
+            {
+                localColorTolerance = colorTolerance;
+                localColorToleranceName = colorToleranceName;
             }
         }
 
@@ -278,21 +275,24 @@ namespace SCB
             return localColorTolerance;
         }
 
-
-        internal static (ColorTolerance userSelected, ColorTolerance tanCarrier, ColorTolerance brownCarrier) GetColorTolerances()
+        /// <summary>
+        /// Get color tolerance name.
+        /// <summary>
+        internal static string GetColorToleranceName()
         {
             lock ( locker )
             {
-                if ( localColorTolerance != null && localTanCarrier != null && localBrownCarrier != null )
+                if ( localColorToleranceName != "" )
                 {
-                    return (localColorTolerance, localTanCarrier, localBrownCarrier);
+                    return localColorToleranceName;
                 }
-                ErrorHandler.HandleException( new Exception( "No color tolerances selected" ) );
+                ErrorHandler.HandleException( new Exception( "No color tolerance selected" ) );
             }
 
             // This line should never be reached, but the compiler requires a return value.
-            return (localColorTolerance, localTanCarrier, localBrownCarrier);
+            return localColorToleranceName;
         }
+
 
 
         // Additional methods for window handle, game rectangle, etc., can remain unchanged
@@ -306,6 +306,7 @@ namespace SCB
             lock ( locker )
             {
                 localRect = rect;
+                ScreenCap.WindowRect = rect;
             }
         }
 
@@ -350,6 +351,7 @@ namespace SCB
                 return localHWnd;
             }
         }
+
     }
 
 
@@ -358,7 +360,7 @@ namespace SCB
     /// <summary>
     /// Struct that holds information about enemy data, including position, visibility, and capture time.
     /// </summary>
-    internal struct EnemyData
+    internal struct EnemyData : IComparable
     {
         /// <summary>
         /// Gets the head position of the enemy.
@@ -368,7 +370,7 @@ namespace SCB
         /// <summary>
         /// Gets the center position of the enemy.
         /// </summary>
-        internal PointF Center { get; private set; }
+        internal PointF Body { get; private set; }
 
         /// <summary>
         /// Gets the time at which the enemy's data was captured.
@@ -386,34 +388,134 @@ namespace SCB
         internal double Distance { get; private set; }
 
         /// <summary>
+        /// Base sleep time based of enemy distance.
+        /// </summary>
+        internal double SleepTime { get; private set; }
+
+        /// <summary>
+        /// Distance from crosshair to enemy head.
+        /// </summary>
+        internal (double toHead, double toBody) DistanceFromCenter { get; private set; }
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="EnemyData"/> struct with enemy positions, capture time, and window information.
         /// </summary>
         /// <param name="head">The head position of the enemy.</param>
-        /// <param name="center">The center position of the enemy.</param>
+        /// <param name="body">The center position of the enemy.</param>
         /// <param name="captureTime">The time the data was captured.</param>
         /// <param name="windowRect">The current window rectangle.</param>
-        internal EnemyData( ref PointF head, ref PointF center, ref double captureTime, ref PInvoke.RECT windowRect )
+        internal EnemyData( ref PointF head, ref PointF body, ref double captureTime, ref double pixelHeight, PInvoke.RECT windowRect )
         {
             Head = head;
-            Center = center;
+            Body = body;
             CaptureTime = captureTime;
             WindowRect = windowRect;
-            Distance = CalculateDistance(); // Calculate the distance to the enemy.
+            (Distance, SleepTime) = CalculateActualDistance( pixelHeight, windowRect );
+            CalculateDistance( Head, Body ); // Calculate the distance to the enemy.
         }
 
         /// <summary>
         /// Calculates the distance from the center of the screen to the enemy's head position.
         /// </summary>
         /// <returns>The calculated distance.</returns>
-        private readonly double CalculateDistance()
+        private void CalculateDistance( PointF head, PointF body )
         {
             // Calculate the center point of the game window.
             PointF screenCenter = new( WindowRect.left + ( WindowRect.right - WindowRect.left ) / 2,
                                              WindowRect.top + ( WindowRect.bottom - WindowRect.top ) / 2 );
 
             // Use a hypothetical utility function (Mathf.GetDistance) to compute the distance.
-            var head = Head;
-            return Mathf.GetDistance<double>( ref screenCenter, ref head );
+
+            double headDistance = Mathf.GetDistance<double>( ref screenCenter, ref head );
+            double bodyDistance = Mathf.GetDistance<double>( ref screenCenter, ref body );
+
+            DistanceFromCenter = (headDistance, bodyDistance);
+        }
+
+
+        /// <summary>
+        /// Calculates the actual distance to the enemy based on the pixel height of the enemy in the image,
+        /// and scales the pixel height based on the current window size.
+        /// </summary>
+        /// <param name="pixelHeight">The pixel height of the enemy.</param>
+        /// <param name="windowRect">The current game window size.</param>
+        /// <returns>The calculated distance in meters.</returns>
+        private static (double distance, double sleepTime) CalculateActualDistance( double pixelHeight, PInvoke.RECT windowRect )
+        {
+            // Original resolution (2560x1440) where the pixel heights were measured
+            const double originalHeight = 1440.0;
+
+            // Known pixel heights at specific distances (measured at 2560x1440 resolution)
+            var distanceData = new (double Distance, double PixelHeight)[]
+            {
+                (5.0, 300.0), // 5m = 342px
+                (10.0, 167.0), // 10m = 167px
+                (15.0, 119.0), // 15m = 119px
+                (20.0, 90.0), // 20m = 90px
+                (25.0, 71.0), // 25m = 71px
+                (30.0, 61.0), // 30m = 61px
+                (35.0, 50.0), // 35m = 50px
+                (40.0, 45.0) // 40m = 45px
+            };
+
+            // Calculate the current window height based on the RECT
+            double currentHeight = windowRect.bottom - windowRect.top;
+
+            // Scale the pixel height based on the current window height compared to the original height
+            double scaledPixelHeight = pixelHeight * ( originalHeight / currentHeight );
+
+            // Find the closest distance range or extrapolate
+            double distance = GetDistanceFromPixelHeight( scaledPixelHeight, distanceData );
+
+            var sleepThresholds = new List<(double Distance, double SleepTime)>
+            {
+                (10, 50),   // Close range (0-10m) = 50 sleep time
+                (20, 200),  // Mid-range (10-20m) = 200 sleep time
+                (30, 500),  // Long-range (20-30m) = 500 sleep time
+                (double.MaxValue, 1000) // Very far range (30m+) = 1000 sleep time
+            };
+
+            // Find the sleep time corresponding to the calculated distance
+            double sleepTime = sleepThresholds.First( t => distance <= t.Distance ).SleepTime;
+
+            return (distance, sleepTime);
+        }
+
+        /// <summary>
+        /// Determines the actual distance based on the scaled pixel height, using interpolation or extrapolation.
+        /// </summary>
+        /// <param name="scaledPixelHeight">The scaled pixel height of the enemy.</param>
+        /// <param name="distanceData">An array of known distances and corresponding pixel heights.</param>
+        /// <returns>The interpolated or extrapolated distance.</returns>
+        private static double GetDistanceFromPixelHeight( double scaledPixelHeight, (double Distance, double PixelHeight)[] distanceData )
+        {
+            // Check if the scaled pixel height is larger than the closest point (meaning distance is less than 5m)
+            if ( scaledPixelHeight >= distanceData[ 0 ].PixelHeight )
+            {
+                return distanceData[ 0 ].Distance;
+            }
+
+            // Loop through the data points to find the range
+            for ( int i = 0; i < distanceData.Length - 1; i++ )
+            {
+                if ( scaledPixelHeight <= distanceData[ i ].PixelHeight && scaledPixelHeight > distanceData[ i + 1 ].PixelHeight )
+                {
+                    // Interpolate between the two data points
+                    return Mathf.Lerp(
+                        distanceData[ i ].Distance,
+                        distanceData[ i + 1 ].Distance,
+                        Mathf.InverseLerp( distanceData[ i ].PixelHeight, distanceData[ i + 1 ].PixelHeight, scaledPixelHeight )
+                    );
+                }
+            }
+
+            // If pixel height is smaller than the smallest known height, extrapolate beyond 40m
+            double pixelHeightDiff = distanceData[ ^1 ].PixelHeight - distanceData[ ^2 ].PixelHeight;
+            double distanceDiff = distanceData[ ^1 ].Distance - distanceData[ ^2 ].Distance;
+
+            // Calculate ratio and extrapolate beyond 40m
+            double ratio = ( scaledPixelHeight - distanceData[ ^1 ].PixelHeight ) / pixelHeightDiff;
+            return distanceData[ ^1 ].Distance + ratio * distanceDiff;
         }
 
         /// <summary>
@@ -423,34 +525,82 @@ namespace SCB
         /// <param name="center">The new center position of the enemy.</param>
         /// <param name="captureTime">The new capture time.</param>
         /// <param name="windowRect">The updated window rectangle.</param>
-        internal void Update( ref PointF head, ref PointF center, ref double captureTime, ref PInvoke.RECT windowRect )
+        internal void Update( ref PointF head, ref PointF body, ref double captureTime, ref double pixelHeight, PInvoke.RECT windowRect )
         {
             Head = head;
-            Center = center;
+            Body = body;
             CaptureTime = captureTime;
             WindowRect = windowRect;
-            Distance = CalculateDistance(); // Recalculate the distance based on the updated data.
+            (Distance, SleepTime) = CalculateActualDistance( pixelHeight, windowRect );
+            CalculateDistance( Head, Body ); // Recalculate the distance based on the updated data.
         }
 
-        /// <summary>
-        /// Compares this instance to another instance of <see cref="EnemyData"/> based on the distance to the enemy.
-        /// </summary>
-        /// <param name="other">The other <see cref="EnemyData"/> instance to compare to.</param>
-        /// <returns>A value indicating the relative order of the objects being compared.</returns>
-        readonly internal bool CompareTo( double distance )
-        {
-            return Distance < distance;
-        }
 
-        readonly internal PointF PredictPos( ref PointF previousPos, AimLocation location, double previousCaptrueTime )
+        public readonly int CompareTo( object? obj )
         {
-            PointF currentPos = Head;
-            if ( location == AimLocation.body )
+            if ( obj == null )
             {
-                currentPos = Center;
+                return 1;
             }
-            float timeDelta = ( float ) ( CaptureTime - previousCaptrueTime );
-            return Mathf.MotionExtrapolation( currentPos, previousPos, timeDelta, 3 );
+
+            if ( obj is EnemyData other )
+            {
+                return Distance.CompareTo( other.Distance );
+            } else
+            {
+                ErrorHandler.HandleException( new ArgumentException( "Object is not an EnemyData" ) );
+            }
+
+            return -1;
+        }
+
+        public readonly override Boolean Equals( [NotNullWhen( true )] Object? obj )
+        {
+            return base.Equals( obj );
+        }
+
+        public readonly override int GetHashCode()
+        {
+            return base.GetHashCode();
+        }
+
+
+        // This is inherited from the base class, so it is not necessary to override it.
+        //public override string ToString()
+        //{
+        //    return base.ToString();
+        //}
+
+        // operator overloads
+
+        public static bool operator ==( EnemyData left, EnemyData right )
+        {
+            return left.Equals( right );
+        }
+
+        public static bool operator !=( EnemyData left, EnemyData right )
+        {
+            return !( left == right );
+        }
+
+        public static bool operator <( EnemyData left, EnemyData right )
+        {
+            return left.CompareTo( right ) < 0;
+        }
+
+        public static bool operator >( EnemyData left, EnemyData right )
+        {
+            return left.CompareTo( right ) > 0;
+        }
+
+        public static bool operator <=( EnemyData left, EnemyData right )
+        {
+            return left.CompareTo( right ) <= 0;
+        }
+
+        public static bool operator >=( EnemyData left, EnemyData right )
+        {
+            return left.CompareTo( right ) >= 0;
         }
     }
 

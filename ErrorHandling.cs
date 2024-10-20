@@ -50,16 +50,6 @@ namespace SCB
             PrintClose();
         }
 
-        internal static void PrintToStatusBar( string message )
-        {
-            if ( statusLabel != null && statusPanel != null )
-            {
-                statusLabel.Text = message;
-                statusLabel.ForeColor = Color.Green;
-                statusPanel.Visible = true;
-            }
-        }
-
 
         /// <summary>
         /// Handles an exception, logs it, and updates the status bar.

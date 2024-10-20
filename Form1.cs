@@ -3,6 +3,7 @@
 #endif
 
 using System.Drawing.Drawing2D;
+using System.Text.Json;
 using MaterialSkin.Controls;
 using Recoil;
 using Utils;
@@ -47,6 +48,8 @@ namespace SCB
             //setup misc stuff
             activeGameCancellation = new CancellationTokenSource();
 
+
+            // Create the tray icon
             trayIcon = new()
             {
                 Text = "IceColorBot",
@@ -57,21 +60,23 @@ namespace SCB
             trayIcon.ContextMenuStrip.Items.Add( "Open", null, ReOpen );
             trayIcon.Visible = false;
 
+
+            // Set the dark mode
             DarkMode.SetDarkMode( this.Handle );
 
+            // Start the threads
             isGameActive = new Thread( () => Utils.UtilsThreads.SmartGameCheck( ref activeGameCancellation ) );
             smartKey = new Thread( () => Utils.UtilsThreads.UiSmartKey( trayIcon, this, activeGameCancellation ) );
             isGameActive.Start();
             smartKey.Start();
 
-            Utils.Mathf.SetupPermutationTable();
-            RecoilPatternProcessor.ProcessAllGunPatterns();
-
-
             // Initialize the form components
             InitializeComponent();
             InitializeStatusBar();
             ErrorHandler.Initialize( statusPanel!, statusLabel! );
+
+            // enable UI updates based on loading configs
+            PlayerConfigs.OnSettingsLoaded += UpdateSettingsUI;
         }
 
 
@@ -114,14 +119,14 @@ namespace SCB
             this.materialSlider1.Text = "Aim Speed";
             this.materialSlider1.UseAccentColor = true;
             this.materialSlider1.ValueMax = 100;
-            this.materialSlider1.onValueChanged +=  this.materialSlider1_onValueChanged ;
+            this.materialSlider1.onValueChanged += this.materialSlider1_onValueChanged;
             // 
             // materialSlider2
             // 
             this.materialSlider2.Depth = 0;
             this.materialSlider2.Font = new Font( "Roboto", 12F, FontStyle.Regular, GraphicsUnit.Pixel );
             this.materialSlider2.FontType = MaterialSkin.MaterialSkinManager.fontType.Caption;
-            this.materialSlider2.ForeColor = Color.FromArgb(       222,       0,       0,       0 );
+            this.materialSlider2.ForeColor = Color.FromArgb( 222, 0, 0, 0 );
             this.materialSlider2.Location = new Point( 2, 221 );
             this.materialSlider2.MouseState = MaterialSkin.MouseState.HOVER;
             this.materialSlider2.Name = "materialSlider2";
@@ -131,7 +136,7 @@ namespace SCB
             this.materialSlider2.Text = "Aim Smoothing";
             this.materialSlider2.UseAccentColor = true;
             this.materialSlider2.ValueMax = 100;
-            this.materialSlider2.onValueChanged +=  this.materialSlider2_onValueChanged ;
+            this.materialSlider2.onValueChanged += this.materialSlider2_onValueChanged;
             // 
             // materialSwitch1
             // 
@@ -149,20 +154,21 @@ namespace SCB
             this.materialSwitch1.Text = "Anti-Recoil";
             this.materialSwitch1.TextAlign = ContentAlignment.TopCenter;
             this.materialSwitch1.UseVisualStyleBackColor = true;
-            this.materialSwitch1.CheckedChanged +=  this.materialSwitch1_CheckedChanged ;
+            this.materialSwitch1.CheckedChanged += this.materialSwitch1_CheckedChanged;
             // 
             // materialComboBox1
             // 
             this.materialComboBox1.AutoResize = false;
-            this.materialComboBox1.BackColor = Color.FromArgb(       255,       255,       255 );
+            this.materialComboBox1.BackColor = Color.FromArgb( 255, 255, 255 );
             this.materialComboBox1.Depth = 0;
             this.materialComboBox1.DrawMode = DrawMode.OwnerDrawVariable;
             this.materialComboBox1.DropDownHeight = 174;
             this.materialComboBox1.DropDownStyle = ComboBoxStyle.DropDownList;
             this.materialComboBox1.DropDownWidth = 121;
             this.materialComboBox1.Font = new Font( "Microsoft Sans Serif", 14F, FontStyle.Bold, GraphicsUnit.Pixel );
-            this.materialComboBox1.ForeColor = Color.FromArgb(       222,       0,       0,       0 );
+            this.materialComboBox1.ForeColor = Color.FromArgb( 222, 0, 0, 0 );
             this.materialComboBox1.FormattingEnabled = true;
+            this.materialComboBox1.Hint = "select color";
             this.materialComboBox1.IntegralHeight = false;
             this.materialComboBox1.ItemHeight = 43;
             this.materialComboBox1.Items.AddRange( new object[] { "orange", "red", "green", "yellow", "purple", "cyan" } );
@@ -173,7 +179,7 @@ namespace SCB
             this.materialComboBox1.Size = new Size( 190, 49 );
             this.materialComboBox1.StartIndex = 0;
             this.materialComboBox1.TabIndex = 38;
-            this.materialComboBox1.SelectedIndexChanged +=  this.materialComboBox1_SelectedIndexChanged ;
+            this.materialComboBox1.SelectedIndexChanged += this.materialComboBox1_SelectedIndexChanged;
             // 
             // materialLabel1
             // 
@@ -193,15 +199,16 @@ namespace SCB
             // materialComboBox2
             // 
             this.materialComboBox2.AutoResize = false;
-            this.materialComboBox2.BackColor = Color.FromArgb(       255,       255,       255 );
+            this.materialComboBox2.BackColor = Color.FromArgb( 255, 255, 255 );
             this.materialComboBox2.Depth = 0;
             this.materialComboBox2.DrawMode = DrawMode.OwnerDrawVariable;
             this.materialComboBox2.DropDownHeight = 174;
             this.materialComboBox2.DropDownStyle = ComboBoxStyle.DropDownList;
             this.materialComboBox2.DropDownWidth = 121;
             this.materialComboBox2.Font = new Font( "Microsoft Sans Serif", 14F, FontStyle.Bold, GraphicsUnit.Pixel );
-            this.materialComboBox2.ForeColor = Color.FromArgb(       222,       0,       0,       0 );
+            this.materialComboBox2.ForeColor = Color.FromArgb( 222, 0, 0, 0 );
             this.materialComboBox2.FormattingEnabled = true;
+            this.materialComboBox2.Hint = "select aim location";
             this.materialComboBox2.IntegralHeight = false;
             this.materialComboBox2.ItemHeight = 43;
             this.materialComboBox2.Items.AddRange( new object[] { "head", "body" } );
@@ -212,7 +219,7 @@ namespace SCB
             this.materialComboBox2.Size = new Size( 190, 49 );
             this.materialComboBox2.StartIndex = 0;
             this.materialComboBox2.TabIndex = 40;
-            this.materialComboBox2.SelectedIndexChanged +=  this.materialComboBox2_SelectedIndexChanged ;
+            this.materialComboBox2.SelectedIndexChanged += this.materialComboBox2_SelectedIndexChanged;
             // 
             // materialLabel2
             // 
@@ -232,15 +239,16 @@ namespace SCB
             // materialComboBox3
             // 
             this.materialComboBox3.AutoResize = false;
-            this.materialComboBox3.BackColor = Color.FromArgb(       255,       255,       255 );
+            this.materialComboBox3.BackColor = Color.FromArgb( 255, 255, 255 );
             this.materialComboBox3.Depth = 0;
             this.materialComboBox3.DrawMode = DrawMode.OwnerDrawVariable;
             this.materialComboBox3.DropDownHeight = 174;
             this.materialComboBox3.DropDownStyle = ComboBoxStyle.DropDownList;
             this.materialComboBox3.DropDownWidth = 121;
             this.materialComboBox3.Font = new Font( "Microsoft Sans Serif", 14F, FontStyle.Bold, GraphicsUnit.Pixel );
-            this.materialComboBox3.ForeColor = Color.FromArgb(       222,       0,       0,       0 );
+            this.materialComboBox3.ForeColor = Color.FromArgb( 222, 0, 0, 0 );
             this.materialComboBox3.FormattingEnabled = true;
+            this.materialComboBox3.Hint = "select aim key";
             this.materialComboBox3.IntegralHeight = false;
             this.materialComboBox3.ItemHeight = 43;
             this.materialComboBox3.Items.AddRange( new object[] { "left mouse button", "right mouse button", "left shift", "left alt", "left control" } );
@@ -251,7 +259,7 @@ namespace SCB
             this.materialComboBox3.Size = new Size( 190, 49 );
             this.materialComboBox3.StartIndex = 0;
             this.materialComboBox3.TabIndex = 42;
-            this.materialComboBox3.SelectedIndexChanged +=  this.materialComboBox3_SelectedIndexChanged ;
+            this.materialComboBox3.SelectedIndexChanged += this.materialComboBox3_SelectedIndexChanged;
             // 
             // materialLabel3
             // 
@@ -287,7 +295,7 @@ namespace SCB
             this.materialButton1.Type = MaterialButton.MaterialButtonType.Contained;
             this.materialButton1.UseAccentColor = false;
             this.materialButton1.UseVisualStyleBackColor = true;
-            this.materialButton1.Click +=  this.materialButton1_Click ;
+            this.materialButton1.Click += this.materialButton1_Click;
             // 
             // materialButton2
             // 
@@ -308,7 +316,7 @@ namespace SCB
             this.materialButton2.Type = MaterialButton.MaterialButtonType.Contained;
             this.materialButton2.UseAccentColor = true;
             this.materialButton2.UseVisualStyleBackColor = true;
-            this.materialButton2.Click +=  this.materialButton2_Click ;
+            this.materialButton2.Click += this.materialButton2_Click;
             // 
             // materialButton4
             // 
@@ -329,7 +337,7 @@ namespace SCB
             this.materialButton4.Type = MaterialButton.MaterialButtonType.Outlined;
             this.materialButton4.UseAccentColor = false;
             this.materialButton4.UseVisualStyleBackColor = true;
-            this.materialButton4.Click +=  this.materialButton4_Click ;
+            this.materialButton4.Click += this.materialButton4_Click;
             // 
             // materialSwitch2
             // 
@@ -347,7 +355,7 @@ namespace SCB
             this.materialSwitch2.Text = "Prediction";
             this.materialSwitch2.TextAlign = ContentAlignment.TopCenter;
             this.materialSwitch2.UseVisualStyleBackColor = true;
-            this.materialSwitch2.CheckedChanged +=  this.materialSwitch2_CheckedChanged ;
+            this.materialSwitch2.CheckedChanged += this.materialSwitch2_CheckedChanged;
             // 
             // materialSlider3
             // 
@@ -369,7 +377,7 @@ namespace SCB
             this.materialSlider3.Value = 100;
             this.materialSlider3.ValueMax = 3840;
             this.materialSlider3.ValueSuffix = "px";
-            this.materialSlider3.onValueChanged +=  this.materialSlider3_onValueChanged ;
+            this.materialSlider3.onValueChanged += this.materialSlider3_onValueChanged;
             // 
             // materialSlider4
             // 
@@ -388,7 +396,7 @@ namespace SCB
             this.materialSlider4.Text = "Deadzone";
             this.materialSlider4.UseAccentColor = true;
             this.materialSlider4.ValueMax = 100;
-            this.materialSlider4.onValueChanged +=  this.materialSlider4_onValueChanged ;
+            this.materialSlider4.onValueChanged += this.materialSlider4_onValueChanged;
             // 
             // materialButton3
             // 
@@ -408,7 +416,7 @@ namespace SCB
             this.materialButton3.Type = MaterialButton.MaterialButtonType.Outlined;
             this.materialButton3.UseAccentColor = true;
             this.materialButton3.UseVisualStyleBackColor = true;
-            this.materialButton3.Click +=  this.materialButton3_Click ;
+            this.materialButton3.Click += this.materialButton3_Click;
             // 
             // materialButton5
             // 
@@ -428,7 +436,7 @@ namespace SCB
             this.materialButton5.Type = MaterialButton.MaterialButtonType.Outlined;
             this.materialButton5.UseAccentColor = true;
             this.materialButton5.UseVisualStyleBackColor = true;
-            this.materialButton5.Click +=  this.materialButton5_Click ;
+            this.materialButton5.Click += this.materialButton5_Click;
             // 
             // IceColorBot
             // 
@@ -708,16 +716,9 @@ namespace SCB
 
         private void materialButton1_Click( object? sender, EventArgs e )
         {
-            //            if ( aimBot == null )
-            //            {
-            //                aimBot = new AimBot();
-            //            }
+            Utils.Watch.StartCaptureWatch();
+            AimBot.Start( PlayerData.GetRect() );
 
-            //#if DEBUG
-            //            aimBot.Start( ref logger, PlayerData.GetRect() );
-            //#else
-            //            aimBot.Start( PlayerData.GetRect() );
-            //#endif
 #if DEBUG
 #if GETRECOILPATTERN
             var gameRect = PlayerData.GetRect();
@@ -729,7 +730,8 @@ namespace SCB
 
         private void materialButton2_Click( object? sender, EventArgs e )
         {
-            //aimBot.Stop();
+            AimBot.Stop();
+            Utils.Watch.StopCaptureWatch();
 #if GETRECOILPATTERN
             recoilPatternCapture!.StopMonitoring();
 #endif
@@ -832,5 +834,80 @@ namespace SCB
             configurationsForm = new();
             configurationsForm.Show();
         }
+
+
+        // Method in the MainForm to update the displayed settings using a Dictionary
+        public void UpdateSettingsUI( Dictionary<string, object?> blobFields )
+        {
+            // Handle AimSpeed (double)
+            if ( blobFields.ContainsKey( "localAimSpeed" ) && blobFields[ "localAimSpeed" ] is JsonElement aimSpeedJson )
+            {
+                double aimSpeed = aimSpeedJson.GetDouble();
+                materialSlider1.Value = ( int ) aimSpeed;
+            }
+
+            // Handle AimSmoothing (double)
+            if ( blobFields.ContainsKey( "localAimSmoothing" ) && blobFields[ "localAimSmoothing" ] is JsonElement aimSmoothingJson )
+            {
+                double aimSmoothing = aimSmoothingJson.GetDouble();
+                materialSlider2.Value = ( int ) aimSmoothing;
+            }
+
+            // Handle AimFov (int)
+            if ( blobFields.ContainsKey( "localAimFov" ) && blobFields[ "localAimFov" ] is JsonElement aimFovJson )
+            {
+                int aimFov = aimFovJson.GetInt32();
+                materialSlider3.Value = aimFov;
+            }
+
+            // Handle Deadzone (int)
+            if ( blobFields.ContainsKey( "localDeadzone" ) && blobFields[ "localDeadzone" ] is JsonElement deadzoneJson )
+            {
+                int deadzone = deadzoneJson.GetInt32();
+                materialSlider4.Value = deadzone;
+            }
+
+            // Handle AimKey (int or string)
+            if ( blobFields.ContainsKey( "localAimKey" ) && blobFields[ "localAimKey" ] is JsonElement aimKeyJson )
+            {
+                int aimKey = aimKeyJson.GetInt32();
+                materialComboBox3.SelectedItem = aimKey.ToString();
+                materialComboBox3.Refresh(); // Force redraw
+            }
+
+            // Handle AimLocation (int for selected index)
+            if ( blobFields.ContainsKey( "localAimLocation" ) && blobFields[ "localAimLocation" ] is JsonElement aimLocationJson )
+            {
+                int aimLocationIndex = aimLocationJson.GetInt32();
+                materialComboBox2.SelectedIndex = aimLocationIndex;
+                materialComboBox2.Refresh(); // Force redraw
+            }
+
+            // Handle ColorTolerance (string)
+            if ( blobFields.ContainsKey( "localColorToleranceName" ) && blobFields[ "localColorToleranceName" ] is JsonElement colorToleranceJson )
+            {
+                string colorTolerance = colorToleranceJson.GetString();
+                materialComboBox1.Text = colorTolerance;
+                materialComboBox1.Refresh(); // Force redraw
+            }
+
+            // Handle Prediction (bool)
+            if ( blobFields.ContainsKey( "localPrediction" ) && blobFields[ "localPrediction" ] is JsonElement predictionJson )
+            {
+                bool prediction = predictionJson.GetBoolean();
+                materialSwitch2.Checked = prediction;
+            }
+
+            // Handle AntiRecoil (bool)
+            if ( blobFields.ContainsKey( "localAntiRecoil" ) && blobFields[ "localAntiRecoil" ] is JsonElement antiRecoilJson )
+            {
+                bool antiRecoil = antiRecoilJson.GetBoolean();
+                materialSwitch1.Checked = antiRecoil;
+            }
+
+            Invalidate(); // Redraw the form to reflect the changes
+        }
+
+
     }
 }

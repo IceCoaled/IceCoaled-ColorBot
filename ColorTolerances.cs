@@ -1,22 +1,72 @@
 ﻿
 namespace SCB
 {
+
+    /// <summary>The Range class.</summary>
+    /// <typeparam name="T">Generic parameter.</typeparam>
+    internal class Range<T> where T : IComparable<T>
+    {
+        /// <summary>Minimum value of the range.</summary>
+        internal T Minimum { get; set; }
+
+        /// <summary>Maximum value of the range.</summary>
+        internal T Maximum { get; set; }
+
+        /// <summary>Presents the Range in readable format.</summary>
+        /// <returns>String representation of the Range</returns>
+        public override string ToString()
+        {
+            return string.Format( "[{0} - {1}]", this.Minimum, this.Maximum );
+        }
+
+        /// <summary>Determines if the range is valid.</summary>
+        /// <returns>True if range is valid, else false</returns>
+        internal bool IsValid()
+        {
+            return this.Minimum.CompareTo( this.Maximum ) <= 0;
+        }
+
+        /// <summary>Determines if the provided value is inside the range.</summary>
+        /// <param name="value">The value to test</param>
+        /// <returns>True if the value is inside Range, else false</returns>
+        internal bool Contains( T value )
+        {
+            return ( this.Minimum.CompareTo( value ) <= 0 ) && ( value.CompareTo( this.Maximum ) <= 0 );
+        }
+
+        /// <summary>Determines if this Range is inside the bounds of another range.</summary>
+        /// <param name="Range">The parent range to test on</param>
+        /// <returns>True if range is inclusive, else false</returns>
+        internal bool IsInsideRange( Range<T> range )
+        {
+            return this.IsValid() && range.IsValid() && range.Contains( this.Minimum ) && range.Contains( this.Maximum );
+        }
+
+        /// <summary>Determines if another range is inside the bounds of this range.</summary>
+        /// <param name="Range">The child range to test</param>
+        /// <returns>True if range is inside, else false</returns>
+        internal bool ContainsRange( Range<T> range )
+        {
+            return this.IsValid() && range.IsValid() && this.Contains( range.Minimum ) && this.Contains( range.Maximum );
+        }
+    }
+
+
+
+    /// <summary>
+    /// Color tolerance class to handle color tolerances for color filtering.
+    /// </summary>
+    /// <param name="redMin">Minimum red rgb value</param>
+    /// <param name="redMax">Maximum red rgb value</param>
+    /// <param name="greenMin">minimum green rgb value</param>
+    /// <param name="greenMax">Maximum green rgb value</param>
+    /// <param name="blueMin">minimum blue rgb value</param>
+    /// <param name="blueMax">Maximum blue rgb value</param>
     internal class ColorTolerance( int redMin, int redMax, int greenMin, int greenMax, int blueMin, int blueMax )
     {
-        // Properties for color ranges
-        /// <summary>
-        /// Gets the allowable red channel values.
-        /// </summary>
-        public IReadOnlyCollection<int> Red { get; private set; } = new HashSet<int>( Enumerable.Range( redMin, redMax - redMin + 1 ) );
-        /// <summary>
-        /// Gets the allowable green channel values.
-        /// </summary>
-        public IReadOnlyCollection<int> Green { get; private set; } = new HashSet<int>( Enumerable.Range( greenMin, greenMax - greenMin + 1 ) );
-        /// <summary>
-        /// Gets the allowable blue channel values.
-        /// </summary>
-        public IReadOnlyCollection<int> Blue { get; private set; } = new HashSet<int>( Enumerable.Range( blueMin, blueMax - blueMin + 1 ) );
-
+        internal Range<int> Red { get; private set; } = new Range<int> { Minimum = redMin, Maximum = redMax };
+        internal Range<int> Green { get; private set; } = new Range<int> { Minimum = greenMin, Maximum = greenMax };
+        internal Range<int> Blue { get; private set; } = new Range<int> { Minimum = blueMin, Maximum = blueMax };
 
 
         /// <summary>
@@ -26,7 +76,7 @@ namespace SCB
         /// <param name="green">The green component of the color to check.</param>
         /// <param name="blue">The blue component of the color to check.</param>
         /// <returns>Returns true if the color is within the range, otherwise false.</returns>
-        public bool IsColorInRange( int red, int green, int blue )
+        internal bool IsColorInRange( int red, int green, int blue )
         {
             // Check if all components (red, green, and blue) are within their respective ranges.
             return Red.Contains( red ) && Green.Contains( green ) && Blue.Contains( blue );
@@ -38,7 +88,7 @@ namespace SCB
         /// <param name="color">An enumerable representing the RGB components of the color (must contain 3 values).</param>
         /// <returns>Returns true if the color is within the range, otherwise false.</returns>
         /// <exception cref="ArgumentException">Thrown when the color enumerable does not contain exactly 3 components.</exception>
-        public bool IsColorInRange( IEnumerable<int> color )
+        internal bool IsColorInRange( IEnumerable<int> color )
         {
             // Ensure the enumerable contains exactly 3 components for RGB.
             if ( color.Count() < 3 )
@@ -65,8 +115,6 @@ namespace SCB
         private static ColorTolerance? cyan;
         private static ColorTolerance? yellow;
         private static ColorTolerance? purple;
-        private static ColorTolerance? brownPlateCarrier;
-        private static ColorTolerance? tanPlateCarrier;
 
         private static Dictionary<string, ColorTolerance>? colorDictionary;
 
@@ -82,11 +130,9 @@ namespace SCB
             orange = new ColorTolerance( 244, 255, 140, 244, 75, 108 );
             red = new ColorTolerance( 247, 255, 100, 130, 80, 135 );
             green = new ColorTolerance( 30, 110, 240, 255, 30, 97 );
-            cyan = new ColorTolerance( 66, 100, 246, 255, 246, 255 );
+            cyan = new ColorTolerance( 60, 110, 230, 255, 230, 255 );
             yellow = new ColorTolerance( 237, 255, 237, 255, 78, 133 );
             purple = new ColorTolerance( 194, 255, 60, 99, 144, 255 );
-            tanPlateCarrier = new ColorTolerance( 180, 200, 169, 189, 156, 176 );
-            brownPlateCarrier = new ColorTolerance( 131, 151, 116, 136, 101, 121 );
 
             // Create dictionary with color names as keys and their respective ColorTolerance objects as values
             colorDictionary = new Dictionary<string, ColorTolerance>
@@ -97,8 +143,6 @@ namespace SCB
                 { "cyan", cyan },
                 { "yellow", yellow },
                 { "purple", purple },
-                { "tanPlateCarrier", tanPlateCarrier },
-                { "brownPlateCarrier", brownPlateCarrier }
             };
 
 #if DEBUG
