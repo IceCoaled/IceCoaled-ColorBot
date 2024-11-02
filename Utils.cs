@@ -37,6 +37,8 @@ namespace Utils
 
         internal const string tessEngineFile = @"./tessdata/eng.traineddata";
 
+        internal const string shaderFile = @"./shaderfiles/shader.hlsl";
+
         internal static readonly string gameSettingsFile = Path.Combine( Environment.GetFolderPath( Environment.SpecialFolder.LocalApplicationData ), @"Spectre\Saved\Config\WindowsClient\GameUserSettings.ini" );
 
 
