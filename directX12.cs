@@ -1,11 +1,9 @@
 ﻿using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
-using PInvoke;
 using Vortice.D3DCompiler;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
-using Vortice.Direct3D11on12;
 using Vortice.Direct3D12;
 using Vortice.Direct3D12.Debug;
 using Vortice.DXGI;
@@ -14,7 +12,10 @@ using Color = System.Drawing.Color;
 using Feature = Vortice.Direct3D12.Feature;
 
 
-namespace SCB
+namespace SCB                                                                                                //TODO : Consolidate resource views into single heap, and create the views.
+                                                                                                             //TODO : Test the command list and command queue for the d3d12 device to make sure the screen capture gets edited via the shaders correctly.
+                                                                                                             //TODO : Update the target scanning with the new filtering system.
+                                                                                                             //TODO : Update the main loop to not use and action to push the aimbot.
 {
     /// <summary>
     /// Manages DirectX 12 operations, including screen capture, GPU-based filtering, and resource management.
@@ -33,16 +34,16 @@ namespace SCB
         private ID3D12GraphicsCommandList2? commandList;
         private ID3D12CommandAllocator? commandAllocator;
 
-        // Dxgi interface 
+        // Dxgi interface for desktop duplication 
         private IDXGIAdapter1? desktopAdapter;
-        private ID3D11On12Device? d3d11On12Device;
-        private ID3D11Device? d3d11Device;
         private IDXGIOutput? output;
         private IDXGIOutput1? output1;
         private IDXGIOutputDuplication? outputDuplication;
+        private ID3D11Device? d3d11Device;
+        private ID3D11Device1? d3d11Device1;
+        private ID3D11DeviceContext? d3d11Context;
 
         // Descriptor Heaps
-        private ID3D12DescriptorHeap? rtvHeap; // Render Target View Heap
         private ID3D12DescriptorHeap? srvHeap; // Shader Resource View Heap
         private ID3D12DescriptorHeap? uavHeap; // Unordered Access View Heap
 
@@ -50,6 +51,8 @@ namespace SCB
         private ID3D12RootSignature? rootSignature;
 
         // Staging Buffers and Resources
+        private nint captResSharedHandle; // Shared handle for capturedResource
+        private ID3D11Resource d3d11CapturedResource; // D3D11 shared resource for capturedResource
         private ID3D12Resource? capturedResource; // Resource for captured screen data
         private ID3D12Resource? filteredResource; // Resource for storing filtered image data
 
@@ -67,7 +70,8 @@ namespace SCB
         ID3D12InfoQueue1? infoQueue;
 
         // Monitor information
-        private RECT monitorRect;
+        private readonly uint monitorWidth;
+        private readonly uint monitorHeight;
 
 
 
@@ -82,14 +86,9 @@ namespace SCB
         internal DirectX12()
         {
             // Get the monitor information
-            Screen primaryScreen = Screen.PrimaryScreen;
-            monitorRect = new RECT
-            {
-                left = primaryScreen!.Bounds.Left,
-                top = primaryScreen!.Bounds.Top,
-                right = primaryScreen!.Bounds.Right,
-                bottom = primaryScreen!.Bounds.Bottom
-            };
+            Screen? primaryScreen = Screen.PrimaryScreen;
+            monitorHeight = ( uint ) primaryScreen!.Bounds.Height;
+            monitorWidth = ( uint ) primaryScreen.Bounds.Width;
 
             // Initialize the DirectX 12 device and core components
             InitD3D12();
@@ -192,29 +191,8 @@ namespace SCB
             }
 #endif
 
-
-            // Create the device
-            if ( !D3D12.D3D12CreateDevice( desktopAdapter, FeatureLevel.Level_12_0, out ID3D12Device2? tempDevice ).Success )
-            {
-                ErrorHandler.HandleException( new Exception( "Failed to create D3D12 device." ) );
-            }
-            d3d12Device = tempDevice;
-            tempDevice = null;
-
-#if DEBUG 
-            // Setup the debug layer
-            SetupDebugLayer();
-#endif
-
-            // Create d3d11 device
-            d3d11Device = D3D11.D3D11CreateDevice( DriverType.Hardware, DeviceCreationFlags.BgraSupport, FeatureLevel.Level_11_1 );
-            if ( d3d11Device == null )
-            {
-                ErrorHandler.HandleException( new Exception( "Failed to create D3D11 device." ) );
-            }
-
             // Get the DXGI output
-            if ( !desktopAdapter.EnumOutputs( 0, out output ).Success )
+            if ( desktopAdapter.EnumOutputs( 0, out output ).Failure )
             {
                 ErrorHandler.HandleException( new Exception( "Failed to get DXGI output." ) );
             }
@@ -227,28 +205,49 @@ namespace SCB
             }
 
 
+            if ( D3D12.D3D12CreateDevice( desktopAdapter, FeatureLevel.Level_12_0, out ID3D12Device2? tempDevice ).Failure )
+            {
+                ErrorHandler.HandleException( new Exception( "Failed to create D3D12 device." ) );
+            }
+            d3d12Device = tempDevice;
+            tempDevice = null;
+
             // Dispose output
             output.Dispose();
 
+
+#if DEBUG
+            // Setup the debug layer
+            SetupDebugLayer();
+#endif
+
+
             // Create the captured and filtered resources
-            capturedResource = ErrorHandler.HandleObjCreation( d3d12Device.CreateCommittedResource( new HeapProperties( HeapType.Default ), HeapFlags.None,
-                ResourceDescription.Texture2D( Format.R8G8B8A8_UNorm, ( uint ) ( monitorRect.right - monitorRect.left ), ( uint ) ( monitorRect.bottom - monitorRect.top ), 1, 1, 1, 0, Vortice.Direct3D12.ResourceFlags.AllowUnorderedAccess ), ResourceStates.CopySource ), nameof( capturedResource ) );
+            capturedResource = ErrorHandler.HandleObjCreation( d3d12Device!.CreateCommittedResource( new HeapProperties( HeapType.Default ), HeapFlags.Shared,
+                ResourceDescription.Texture2D( Format.R8G8B8A8_UNorm, monitorWidth, monitorHeight, 1, 1, 1, 0, Vortice.Direct3D12.ResourceFlags.AllowUnorderedAccess | ResourceFlags.AllowSimultaneousAccess | ResourceFlags.AllowRenderTarget ), ResourceStates.Common ), nameof( capturedResource ) );
 
             filteredResource = ErrorHandler.HandleObjCreation( d3d12Device.CreateCommittedResource( new HeapProperties( HeapType.Default ), HeapFlags.None,
-                ResourceDescription.Texture2D( Format.R8G8B8A8_UNorm, ( uint ) ( monitorRect.right - monitorRect.left ), ( uint ) ( monitorRect.bottom - monitorRect.top ), 1, 1, 1, 0, Vortice.Direct3D12.ResourceFlags.AllowUnorderedAccess ), ResourceStates.Common ), nameof( filteredResource ) );
+                ResourceDescription.Texture2D( Format.R8G8B8A8_UNorm, monitorWidth, monitorHeight, 1, 1, 1, 0, Vortice.Direct3D12.ResourceFlags.AllowUnorderedAccess ), ResourceStates.Common ), nameof( filteredResource ) );
+
+            // Create the security attributes for the shared handle
+            SharpGen.Runtime.Win32.SecurityAttributes securityAttributes = new()
+            {
+                InheritHandle = true,
+                SecurityDescriptor = IntPtr.Zero,
+                Length = Marshal.SizeOf<SharpGen.Runtime.Win32.SecurityAttributes>(),
+
+            };
+
+            // Create the shared handle for the captured resource
+            captResSharedHandle = d3d12Device.CreateSharedHandle( capturedResource!, securityAttributes, nameof( captResSharedHandle ) );
+            if ( captResSharedHandle == nint.Zero )
+            {
+                ErrorHandler.HandleException( new Exception( "Failed to create shared handle for captured resource." ) );
+            }
 
 
             // Create Command Queue
             commandQueue = ErrorHandler.HandleObjCreation( d3d12Device!.CreateCommandQueue( new CommandQueueDescription( CommandListType.Direct ) ), nameof( commandQueue ) );
-
-
-            // Create Render Target View Descriptor Heap
-            rtvHeap = ErrorHandler.HandleObjCreation( d3d12Device.CreateDescriptorHeap( new DescriptorHeapDescription
-            {
-                Type = DescriptorHeapType.RenderTargetView,
-                DescriptorCount = 2,
-                Flags = DescriptorHeapFlags.None
-            } ), nameof( rtvHeap ) );
 
 
             // Create Shader Resource and Unordered Access Descriptor Heaps
@@ -278,10 +277,10 @@ namespace SCB
                 new(RootParameterType.ConstantBufferView, rootDescriptor, ShaderVisibility.All),
 
                 // Descriptor table for SRV at t0
-                new(new RootDescriptorTable(new DescriptorRange(DescriptorRangeType.ShaderResourceView, 1, 0)), ShaderVisibility.Pixel),
+                new(new RootDescriptorTable(new DescriptorRange(DescriptorRangeType.ShaderResourceView, 1, 0)), ShaderVisibility.All),
 
                 // Descriptor table for UAV at u0
-                new(new RootDescriptorTable(new DescriptorRange(DescriptorRangeType.UnorderedAccessView, 1, 0)), ShaderVisibility.Pixel)
+                new(new RootDescriptorTable(new DescriptorRange(DescriptorRangeType.UnorderedAccessView, 1, 0)), ShaderVisibility.All)
             ];
 
             StaticSamplerDescription[] staticSamplers = new StaticSamplerDescription[]
@@ -302,12 +301,34 @@ namespace SCB
             fenceValue = 1;
             fenceEvent = new AutoResetEvent( false );
 
+            // Create D3D11 device and context
+            d3d11Device = ErrorHandler.HandleObjCreation( D3D11.D3D11CreateDevice( DriverType.Hardware, DeviceCreationFlags.BgraSupport, FeatureLevel.Level_12_0 ), nameof( d3d11Device ) );
+            d3d11Context = d3d11Device!.ImmediateContext;
+
+            // Query for D3D11.1 device
+            d3d11Device1 = d3d11Device.QueryInterface<ID3D11Device1>();
+            if ( d3d11Device1 == null )
+            {
+                ErrorHandler.HandleException( new Exception( "Failed to get D3D11.1 device." ) );
+            }
 
             // Get desktop duplication interface
-            outputDuplication = ErrorHandler.HandleObjCreation( output1!.DuplicateOutput( d3d11Device ), nameof( outputDuplication ) );
+            outputDuplication = ErrorHandler.HandleObjCreation( output1!.DuplicateOutput( d3d11Device1 ), nameof( outputDuplication ) );
+
+            // Get shared handle for the captured resource
+            d3d11CapturedResource = d3d11Device1.OpenSharedResource1<ID3D11Resource>( captResSharedHandle );
+            if ( d3d11CapturedResource == null )
+            {
+                ErrorHandler.HandleException( new Exception( "Failed to get shared resource for captured resource." ) );
+            }
 
             // Set root signature and descriptor heaps
             commandList!.SetGraphicsRootSignature( rootSignature );
+
+
+#if DEBUG
+            Logger.Log( "D3D12 Initialized" );
+#endif
         }
 
 
@@ -332,8 +353,16 @@ namespace SCB
             //Setup Message Callback
             Vortice.Direct3D12.Debug.ID3D12InfoQueue1.MessageCallback messageCallback = ( cat, severity, id, description ) =>
             {
+                // Get current time and date
                 var currentTimeAndDate = DateTime.Now.ToString( "MM/dd/yyyy HH:mm:ss" );
+
+                // Create Error log message
                 var message = $"[{currentTimeAndDate}] \n Severity Level : {severity} \n Error Catagory: {cat} \n Error Id: {id} \n Error Description : {description}";
+
+                // Push Write pointer down one line
+                File.AppendAllText( Utils.FilesAndFolders.d3d12LogFile, "\n" );
+
+                // Write the message to the log file
                 File.AppendAllText( Utils.FilesAndFolders.d3d12LogFile, message );
             };
 
@@ -383,7 +412,7 @@ namespace SCB
             WaitForPreviousFrame();
 
             // Get the next frame
-            if ( !outputDuplication!.AcquireNextFrame( 10, out OutduplFrameInfo frameInfo, out IDXGIResource? desktopResource ).Success )
+            if ( outputDuplication!.AcquireNextFrame( 10, out OutduplFrameInfo frameInfo, out IDXGIResource? desktopResource ).Failure )
             {
                 ErrorHandler.HandleExceptionNonExit( new Exception( "Failed to acquire next frame." ) );
                 return;
@@ -392,27 +421,30 @@ namespace SCB
             using ( desktopResource )
             {
 
-                // Get the texture from the shared handle
-                using ID3D12Resource? texture = desktopResource!.QueryInterface<ID3D12Resource>();
-
-                // Get the texture description
-                ResourceDescription textureDesc = texture!.Description;
-
-                // Check if the texture is valid
-                if ( textureDesc.Dimension != Vortice.Direct3D12.ResourceDimension.Texture2D ||
-                    textureDesc.Width != ( ulong ) ( monitorRect.right - monitorRect.left ) ||
-                    textureDesc.Height != ( uint ) ( monitorRect.bottom - monitorRect.top ) )
+                // desktopResource doesnt have a shared handle, so we just query for the d3d11 texture
+                ID3D11Texture2D? d3d11Texture = desktopResource.QueryInterface<ID3D11Texture2D>();
+                if ( d3d11Texture == null )
                 {
-                    ErrorHandler.HandleExceptionNonExit( new Exception( "Invalid texture." ) );
+                    ErrorHandler.HandleExceptionNonExit( new Exception( "Failed to get D3D11 texture." ) );
                     return;
                 }
 
+                // Verify the texture size
+                var desc = d3d11Texture.Description;
+                if ( desc.Width != monitorWidth || desc.Height != monitorHeight )
+                {
+                    ErrorHandler.HandleExceptionNonExit( new Exception( "Texture size does not match monitor size." ) );
+                    return;
+                }
+
+
                 try
                 {
-                    // Reset the command allocator and command list, copy the desktop texture to the captured resource
-                    commandAllocator!.Reset();
-                    commandList!.Reset( commandAllocator, initialPipelineState );
-                    commandList!.CopyResource( capturedResource!, texture! );
+                    // Copy the d3d11 texture to the d3d11 captured resource
+                    d3d11Context!.CopyResource( d3d11CapturedResource, d3d11Texture );
+
+                    // Flush context
+                    d3d11Context!.Flush();
                 } finally
                 {
                     // Release the frame (release as early as possible)
@@ -423,11 +455,16 @@ namespace SCB
                 foreach ( string shaderName in shaderManager!.GetShaderNames() )
                 {
                     ApplyFilterProcess( shaderName );
+
+                    // Reset the resource barriers
+                    commandList!.ResourceBarrierTransition( capturedResource!, ResourceStates.NonPixelShaderResource, ResourceStates.Common );
+                    commandList!.ResourceBarrierTransition( filteredResource!, ResourceStates.CopySource, ResourceStates.Common );
+                    commandList!.Reset( commandAllocator, initialPipelineState );
                 }
 
                 // Map the filtered resource to access the filtered image data
                 void* dataPointer = null;
-                if ( !filteredResource!.Map( 0, dataPointer ).Success )
+                if ( filteredResource!.Map( 0, dataPointer ).Failure )
                 {
                     ErrorHandler.HandleExceptionNonExit( new Exception( "Failed to map filtered resource." ) );
                     return;
@@ -473,22 +510,22 @@ namespace SCB
             commandList!.SetDescriptorHeaps( heaps );
 
             // Set the shader resource view and unordered access view
-            commandList!.SetGraphicsRootDescriptorTable( 0, srvHeap!.GetGPUDescriptorHandleForHeapStart() );
-            commandList!.SetGraphicsRootDescriptorTable( 1, uavHeap!.GetGPUDescriptorHandleForHeapStart() );
+            commandList!.SetComputeRootDescriptorTable( 0, srvHeap!.GetGPUDescriptorHandleForHeapStart() );
+            commandList!.SetComputeRootDescriptorTable( 1, uavHeap!.GetGPUDescriptorHandleForHeapStart() );
 
             // Set the constant buffer for the shader
             var shaderPipeline = shaderManager!.GetShaderPipeLine( sp => sp?.Shader!.ShaderName == shaderName );
             shaderPipeline?.ConstantBuffer?.Let( _ => commandList!.SetGraphicsRootConstantBufferView( 2, shaderPipeline.ConstantBuffer!.GPUVirtualAddress ) );
 
             // Record commands to filter the captured resource
-            commandList!.ResourceBarrierTransition( capturedResource!, ResourceStates.CopySource, ResourceStates.NonPixelShaderResource );
+            commandList!.ResourceBarrierTransition( capturedResource!, ResourceStates.Common, ResourceStates.NonPixelShaderResource );
             commandList!.ResourceBarrierTransition( filteredResource!, ResourceStates.Common, ResourceStates.UnorderedAccess );
 
 
             // Calculate the thread group size and dispatch the shader
             // nvidia and intel will both dynamicaly use 8, 16, 32 wavefonts, amd will dynamically use 32, or 64 wavefronts.
             uint threadGroupSize = gpuVender == "AMD" ? 64u : 32u;
-            uint groupCountX = ( uint ) ( ( ( monitorRect.right - monitorRect.left ) + threadGroupSize - 1 ) / threadGroupSize );
+            uint groupCountX = ( monitorWidth + threadGroupSize - 1 ) / threadGroupSize;
 
 
             commandList!.Dispatch( groupCountX, 1, 1 );
@@ -530,21 +567,20 @@ namespace SCB
                 rootSignature?.Dispose();
                 uavHeap?.Dispose();
                 srvHeap?.Dispose();
-                rtvHeap?.Dispose();
                 commandAllocator?.Dispose();
                 commandList?.Dispose();
                 commandQueue?.Dispose();
                 d3d12Device?.Dispose();
                 shaderManager?.Dispose();
                 desktopAdapter?.Dispose();
+                d3d11Context?.Dispose();
                 d3d11Device?.Dispose();
                 output?.Dispose();
                 output1?.Dispose();
                 outputDuplication?.Dispose();
 
 #if DEBUG
-                IDXGIDebug1? liveReport = null;
-                if ( DXGI.DXGIGetDebugInterface1( out liveReport ).Success )
+                if ( DXGI.DXGIGetDebugInterface1( out IDXGIDebug1? liveReport ).Success )
                 {
                     Guid liveReportAll = new( 0x35cdd7fc, 0x13b2, 0x421d, 0xa5, 0xd7, 0x7e, 0x44, 0x51, 0x28, 0x7d, 0x64 );
                     var file = File.Open( Utils.FilesAndFolders.d3d12LogFile, FileMode.OpenOrCreate, FileAccess.ReadWrite )!;
@@ -583,7 +619,21 @@ namespace SCB
 
             // Dispose unmanaged resources
             disposed = true;
+
         }
+
+        [DllImport( "d3d11.dll", EntryPoint = "D3D11On12CreateDevice", CallingConvention = CallingConvention.StdCall )]
+        static extern long D3D11On12CreateDevice(
+                    [In] nint pDevice,
+                    uint Flags,
+                    [In, Optional] nint FeatureLevels,
+                    uint NumFeatureLevels,
+                    [In, Optional] nint cmdQueues,
+                    uint numQueues,
+                    uint d3d12nodeMask,
+                    out nint ppDevice,
+                    out nint ppImmediateContext,
+                    out uint level );
     }
 
 
@@ -703,7 +753,7 @@ namespace SCB
                 var constantBuffer = CreateConstantBuffer( ref shader );
 
                 // Create the pipeline state for the shader
-                ID3D12PipelineState? pipelineState = ErrorHandler.HandleObjCreation( CreatePipelineState( ref shader!.RefCompiledShader()! ), nameof( pipelineState ) );
+                ID3D12PipelineState? pipelineState = ErrorHandler.HandleObjCreation( CreateComputePipelineState( ref shader!.RefCompiledShader()! ), nameof( pipelineState ) );
 
 
                 // Create the shader pipeline, and add it to the list
@@ -726,26 +776,30 @@ namespace SCB
                 ErrorHandler.HandleException( new Exception( "No color ranges found." ) );
             }
 
-            int constBufferSize = Marshal.SizeOf<ColorRanges>();
+            int rawBufferSize = Marshal.SizeOf<ColorRanges>();
+            uint alignedBufferSize = ( uint ) ( ( rawBufferSize + 255 ) & ~255 );
 
             // Create a constant buffer for the color ranges
             ID3D12Resource? constantBuffer = ErrorHandler.HandleObjCreation( device.CreateCommittedResource( new HeapProperties( HeapType.Upload ), HeapFlags.None,
-               ResourceDescription.Buffer( ( ulong ) constBufferSize, Vortice.Direct3D12.ResourceFlags.None ), ResourceStates.GenericRead ), nameof( constantBuffer ) );
+               ResourceDescription.Buffer( ( ulong ) alignedBufferSize ), ResourceStates.VertexAndConstantBuffer ), nameof( constantBuffer ) );
 
             // Map the constant buffer
             void* mappedData = null;
-            if ( !constantBuffer!.Map( 0, mappedData ).Success )
+            if ( constantBuffer!.Map( 0, &mappedData ).Failure )
             {
                 ErrorHandler.HandleException( new Exception( "Failed to map constant buffer." ) );
                 return default;
             }
 
-            // Copy the color ranges to the constant buffer
-            Buffer.MemoryCopy( &colorRanges, mappedData, constBufferSize, constBufferSize );
 
-            // Unmap the constant buffer
-            constantBuffer.Unmap( 0 );
-            mappedData = null;
+            // Copy the color ranges to the constant buffer
+            try
+            {
+                Buffer.MemoryCopy( &colorRanges, mappedData, rawBufferSize, rawBufferSize );
+            } catch ( Exception ex )
+            {
+                ErrorHandler.HandleExceptionNonExit( new Exception( "Failed to copy color ranges to constant buffer.", ex ) );
+            }
 
             // Create a descriptor heap for the constant buffer
             DescriptorHeapDescription cbvHeapDesc = new()
@@ -762,7 +816,7 @@ namespace SCB
             ConstantBufferViewDescription cbvDesc = new()
             {
                 BufferLocation = constantBuffer.GPUVirtualAddress,
-                SizeInBytes = ( uint ) ( ( constBufferSize + 255 ) & ~255 )
+                SizeInBytes = alignedBufferSize
             };
 
             // Create a constant buffer view
@@ -777,24 +831,17 @@ namespace SCB
         /// </summary>
         /// <param name="shader">The compiled shader Blob.</param>
         /// <returns>An ID3D12PipelineState object representing the created pipeline state.</returns>
-        private ID3D12PipelineState? CreatePipelineState( ref Blob shader )
+        private ID3D12PipelineState? CreateComputePipelineState( ref Blob shader )
         {
-            // Create the pipeline state description
-            GraphicsPipelineStateDescription pipelineDesc = new()
+            // Create the compute pipeline state description
+            ComputePipelineStateDescription computePipelineDesc = new()
             {
                 RootSignature = rootSignature,
-                PixelShader = shader.AsBytes().AsMemory(),
-                VertexShader = ReadOnlyMemory<byte>.Empty, // Placeholder, if needed
-                RenderTargetFormats = new[] { Format.R8G8B8A8_UNorm },
-                SampleDescription = new SampleDescription( 1, 0 ),
-                PrimitiveTopologyType = PrimitiveTopologyType.Triangle,
-                RasterizerState = Vortice.Direct3D12.RasterizerDescription.CullNone,
-                BlendState = Vortice.Direct3D12.BlendDescription.Opaque,
-                DepthStencilState = Vortice.Direct3D12.DepthStencilDescription.None
+                ComputeShader = shader.AsBytes().AsMemory(), // Set the compiled compute shader
             };
 
             // Return the created pipeline state
-            return device.CreateGraphicsPipelineState( pipelineDesc );
+            return device.CreateComputePipelineState( computePipelineDesc );
         }
 
         /// <summary>
@@ -804,7 +851,6 @@ namespace SCB
         /// <param name="shaderName">The name of the shader whose pipeline state is to be set.</param>
         internal void SetPipelineState( ID3D12GraphicsCommandList commandList, string shaderName )
         {
-
             commandList.SetPipelineState( GetShaderPipeLine( sp => sp?.Shader!.ShaderName == shaderName )!.PipelineState );
         }
 
@@ -1013,8 +1059,8 @@ namespace SCB
             var result = Compiler.Compile(
                 ShaderCode!,
                 "main",
-                string.Empty,
-                string.Empty,
+                string.Empty, //< use this to look for the shader in the same directory as the executable.
+                "cs_4_0", //< we can use 5_0 but we are not using any 5_0 features.
                 out Blob blob,
                 out Blob errorBlob
             );
@@ -1058,9 +1104,10 @@ namespace SCB
             }
 
             // Get the screen resolution and set the screen width and height in the shader code.
-            var screenRect = PlayerData.GetRect();
-            uint width = ( uint ) ( screenRect.right - screenRect.left );
-            uint height = ( uint ) ( screenRect.bottom - screenRect.top );
+            Screen? primary = Screen.PrimaryScreen;
+            int width = primary!.Bounds.Width;
+            int height = primary.Bounds.Height;
+
 
             // Use regex to replace any existing SCREEN_WIDTH and SCREEN_HEIGHT definitions.
             ShaderCode = Regex.Replace( ShaderCode!, @"#define SCREEN_WIDTH \d+", $"#define SCREEN_WIDTH {width}" );

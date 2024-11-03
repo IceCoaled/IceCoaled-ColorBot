@@ -1,6 +1,4 @@
-﻿using System.Reflection;
-
-namespace SCB
+﻿namespace SCB
 {
 
     /// <summary>The Range class.</summary>
@@ -287,7 +285,7 @@ namespace SCB
         /// <summary>
         /// Gets the list of character features with their respective color tolerances.
         /// </summary>
-        internal List<Tuple<string, ColorTolerance[]>?> CharacterFeatures { get; private set; }
+        internal List<Tuple<string, ColorTolerance[]>?>? CharacterFeatures { get; private set; }
 
         /// <summary>
         /// Gets the swap color used to highlight features.
@@ -342,6 +340,9 @@ namespace SCB
             SetupLips();
             SetupSkinTones();
 
+            // Setup the character features
+            SetupCharacterFeatures();
+
             // Validate if all the values were set correctly
             if ( CheckFeatureTCount() )
             {
@@ -349,6 +350,7 @@ namespace SCB
                 Logger.Log( "CharacterFeatureTolerances set successfully" );
 #endif
             }
+
         }
 
         /// <summary>
@@ -359,6 +361,22 @@ namespace SCB
             Dispose( false );
         }
 
+
+        /// <summary>
+        /// Sets up the character features and their color tolerances for shaders to get.
+        /// </summary>
+        private void SetupCharacterFeatures()
+        {
+            CharacterFeatures = new()
+            {
+                new Tuple<string, ColorTolerance[]>( "SkinTones", SkinTones ),
+                new Tuple<string, ColorTolerance[]>( "Hair", Hair ),
+                new Tuple<string, ColorTolerance[]>( "Eyes", Eyes ),
+                new Tuple<string, ColorTolerance[]>( "EyeBrows", EyeBrows ),
+                new Tuple<string, ColorTolerance[]>( "Lips", Lips )
+            };
+        }
+
         /// <summary>
         /// Sets up the color tolerances for hair.
         /// </summary>
@@ -366,14 +384,14 @@ namespace SCB
         {
             Hair = new ColorTolerance[ 8 ]
             {
-            new(13, 53, 49, 89, 61, 101),
-            new(50, 90, 78, 118, 70, 110),
-            new(16, 56, 54, 94, 58, 98),
-            new(25, 65, 57, 97, 57, 97),
-            new(33, 73, 61, 101, 56, 96),
-            new(35, 75, 64, 104, 62, 102),
-            new(18, 58, 43, 83, 57, 97),
-            new(14, 54, 32, 72, 45, 85)
+                new(13, 53, 49, 89, 61, 101),
+                new(50, 90, 78, 118, 70, 110),
+                new(16, 56, 54, 94, 58, 98),
+                new(25, 65, 57, 97, 57, 97),
+                new(33, 73, 61, 101, 56, 96),
+                new(35, 75, 64, 104, 62, 102),
+                new(18, 58, 43, 83, 57, 97),
+                new(14, 54, 32, 72, 45, 85)
             };
         }
 
@@ -384,14 +402,14 @@ namespace SCB
         {
             Eyes = new ColorTolerance[ 8 ]
             {
-            new(0, 38, 18, 58, 25, 65),
-            new(29, 69, 20, 60, 15, 55),
-            new(48, 88, 73, 113, 79, 119),
-            new(65, 105, 81, 121, 86, 126),
-            new(75, 115, 85, 125, 85, 125),
-            new(68, 108, 74, 114, 38, 78),
-            new(84, 124, 77, 117, 50, 90),
-            new(71, 111, 61, 101, 36, 76)
+                new(0, 38, 18, 58, 25, 65),
+                new(29, 69, 20, 60, 15, 55),
+                new(48, 88, 73, 113, 79, 119),
+                new(65, 105, 81, 121, 86, 126),
+                new(75, 115, 85, 125, 85, 125),
+                new(68, 108, 74, 114, 38, 78),
+                new(84, 124, 77, 117, 50, 90),
+                new(71, 111, 61, 101, 36, 76)
             };
         }
 
@@ -402,16 +420,16 @@ namespace SCB
         {
             EyeBrows = new ColorTolerance[ 10 ]
             {
-            new(16, 56, 37, 77, 45, 85),
-            new(38, 78, 30, 70, 25, 65),
-            new(53, 93, 44, 84, 37, 77),
-            new(90, 130, 74, 114, 55, 95),
-            new(110, 150, 89, 129, 63, 103),
-            new(38, 78, 28, 68, 19, 59),
-            new(80, 120, 39, 79, 22, 62),
-            new(105, 145, 76, 116, 68, 108),
-            new(135, 175, 129, 169, 135, 175),
-            new(43, 83, 37, 77, 30, 70)
+                new(16, 56, 37, 77, 45, 85),
+                new(38, 78, 30, 70, 25, 65),
+                new(53, 93, 44, 84, 37, 77),
+                new(90, 130, 74, 114, 55, 95),
+                new(110, 150, 89, 129, 63, 103),
+                new(38, 78, 28, 68, 19, 59),
+                new(80, 120, 39, 79, 22, 62),
+                new(105, 145, 76, 116, 68, 108),
+                new(135, 175, 129, 169, 135, 175),
+                new(43, 83, 37, 77, 30, 70)
             };
         }
 
@@ -422,16 +440,16 @@ namespace SCB
         {
             Lips = new ColorTolerance[ 10 ]
             {
-            new(22, 62, 42, 82, 52, 92),
-            new(50, 90, 44, 84, 49, 89),
-            new(79, 119, 66, 106, 64, 104),
-            new(67, 107, 54, 94, 53, 93),
-            new(65, 105, 50, 90, 45, 85),
-            new(80, 120, 55, 95, 38, 78),
-            new(104, 144, 60, 100, 46, 86),
-            new(104, 144, 58, 98, 43, 83),
-            new(104, 144, 68, 108, 56, 96),
-            new(23, 63, 18, 58, 13, 53)
+                new(22, 62, 42, 82, 52, 92),
+                new(50, 90, 44, 84, 49, 89),
+                new(79, 119, 66, 106, 64, 104),
+                new(67, 107, 54, 94, 53, 93),
+                new(65, 105, 50, 90, 45, 85),
+                new(80, 120, 55, 95, 38, 78),
+                new(104, 144, 60, 100, 46, 86),
+                new(104, 144, 58, 98, 43, 83),
+                new(104, 144, 68, 108, 56, 96),
+                new(23, 63, 18, 58, 13, 53)
             };
         }
 
@@ -442,16 +460,16 @@ namespace SCB
         {
             SkinTones = new ColorTolerance[ 10 ]
             {
-            new(17, 57, 40, 80, 70, 110),
-            new(68, 108, 54, 94, 58, 98),
-            new(61, 101, 48, 88, 40, 80),
-            new(66, 106, 49, 89, 36, 76),
-            new(63, 103, 61, 101, 54, 94),
-            new(84, 124, 76, 116, 69, 109),
-            new(74, 114, 69, 109, 69, 109),
-            new(80, 120, 72, 112, 69, 109),
-            new(92, 132, 79, 119, 67, 107),
-            new(14, 54, 20, 60, 25, 65)
+                new(17, 57, 40, 80, 70, 110),
+                new(68, 108, 54, 94, 58, 98),
+                new(61, 101, 48, 88, 40, 80),
+                new(66, 106, 49, 89, 36, 76),
+                new(63, 103, 61, 101, 54, 94),
+                new(84, 124, 76, 116, 69, 109),
+                new(74, 114, 69, 109, 69, 109),
+                new(80, 120, 72, 112, 69, 109),
+                new(92, 132, 79, 119, 67, 107),
+                new(14, 54, 20, 60, 25, 65)
             };
         }
 
@@ -461,44 +479,19 @@ namespace SCB
         /// <returns>True if setup is correct; otherwise, false.</returns>
         private bool CheckFeatureTCount()
         {
-            foreach ( var feature in featureTCount )
+            foreach ( var feature in CharacterFeatures! )
             {
-
-                var field = this.GetType().GetField( feature.Key, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public );
-                if ( field == null )
+                if ( featureTCount.TryGetValue( feature!.Item1, out int expectedCount ) )
                 {
-                    // If field is null, try getting it as a property
-                    var property = this.GetType().GetProperty( feature.Key, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public );
-                    if ( property == null )
+                    if ( feature.Item2.Length != expectedCount )
                     {
-                        ErrorHandler.HandleException( new Exception( $"Field or property {feature.Key} not found" ) );
-                        return false;
-                    }
-
-                    if ( property.GetValue( this ) is not Array propArray )
-                    {
-                        ErrorHandler.HandleException( new Exception( $"Property {feature.Key} is not an array" ) );
-                        return false;
-                    }
-
-                    if ( propArray.Length != feature.Value )
-                    {
-                        ErrorHandler.HandleException( new Exception( $"Property {feature.Key} has {propArray.Length} elements, expected {feature.Value}" ) );
+                        ErrorHandler.HandleException( new Exception( $"Feature {feature.Item1} has {feature.Item2.Length} elements, expected {expectedCount}" ) );
                         return false;
                     }
                 } else
                 {
-                    if ( field.GetValue( this ) is not Array array )
-                    {
-                        ErrorHandler.HandleException( new Exception( $"Field {feature.Key} is not an array" ) );
-                        return false;
-                    }
-
-                    if ( array.Length != feature.Value )
-                    {
-                        ErrorHandler.HandleException( new Exception( $"Field {feature.Key} has {array.Length} elements, expected {feature.Value}" ) );
-                        return false;
-                    }
+                    ErrorHandler.HandleException( new Exception( $"Feature {feature.Item1} not found" ) );
+                    return false;
                 }
             }
             return true;

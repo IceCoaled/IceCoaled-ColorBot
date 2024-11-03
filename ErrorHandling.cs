@@ -131,7 +131,10 @@ namespace SCB
 
         private static void WriteToLog( string message )
         {
-            File.AppendAllLines( Utils.FilesAndFolders.exceptionLogFile, new string[] { message } );
+            string dateAndTime = DateTime.Now.ToString( "yyyy-MM-dd HH:mm:ss" );
+            string logMessage = $"{dateAndTime} \n - {message}";
+            File.AppendAllText( Utils.FilesAndFolders.exceptionLogFile, "\n" );
+            File.AppendAllText( Utils.FilesAndFolders.exceptionLogFile, logMessage );
         }
     }
 }

@@ -758,9 +758,9 @@ namespace SCB
             PlayerData.SetDeadzone( newValue );
         }
 
-        void UnhandledExceptionTrapper( object? sender, UnhandledExceptionEventArgs e )
+        void UnhandledExceptionTrapper( object? sender, UnhandledExceptionEventArgs? e )
         {
-            ErrorHandler.HandleExceptionNonExit( e.ExceptionObject as Exception );
+            ErrorHandler.HandleExceptionNonExit( new Exception( e?.ExceptionObject is Exception ex ? ex.Message : "Unknown Exception" ) );
             OnFormClosed( new FormClosedEventArgs( CloseReason.ApplicationExitCall ) );
         }
 
