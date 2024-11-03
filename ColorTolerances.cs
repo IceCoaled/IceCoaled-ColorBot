@@ -349,9 +349,6 @@ namespace SCB
                 Logger.Log( "CharacterFeatureTolerances set successfully" );
 #endif
             }
-
-            // Setup the character features tuple
-            SetupCharacterFeatures();
         }
 
         /// <summary>
@@ -360,21 +357,6 @@ namespace SCB
         ~CharacterFeatureTolerances()
         {
             Dispose( false );
-        }
-
-        /// <summary>
-        /// Sets up the character features as tuples containing feature name and color tolerances.
-        /// </summary>
-        private void SetupCharacterFeatures()
-        {
-            CharacterFeatures = new List<Tuple<string, ColorTolerance[]>?>
-            {
-                new("SkinTones", SkinTones!),
-                new("Hair", Hair!),
-                new("Eyes", Eyes!),
-                new("EyeBrows", EyeBrows!),
-                new("Lips", Lips!)
-            };
         }
 
         /// <summary>
@@ -481,27 +463,47 @@ namespace SCB
         {
             foreach ( var feature in featureTCount )
             {
-                var field = this.GetType().GetField( feature.Key, BindingFlags.NonPublic | BindingFlags.Instance );
+
+                var field = this.GetType().GetField( feature.Key, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public );
                 if ( field == null )
                 {
-                    ErrorHandler.HandleException( new Exception( $"Field {feature.Key} not found" ) );
-                    return false;
-                }
+                    // If field is null, try getting it as a property
+                    var property = this.GetType().GetProperty( feature.Key, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public );
+                    if ( property == null )
+                    {
+                        ErrorHandler.HandleException( new Exception( $"Field or property {feature.Key} not found" ) );
+                        return false;
+                    }
 
-                if ( field.GetValue( this ) is not Array array )
-                {
-                    ErrorHandler.HandleException( new Exception( $"Field {feature.Key} is not an array" ) );
-                    return false;
-                }
+                    if ( property.GetValue( this ) is not Array propArray )
+                    {
+                        ErrorHandler.HandleException( new Exception( $"Property {feature.Key} is not an array" ) );
+                        return false;
+                    }
 
-                if ( array.Length != feature.Value )
+                    if ( propArray.Length != feature.Value )
+                    {
+                        ErrorHandler.HandleException( new Exception( $"Property {feature.Key} has {propArray.Length} elements, expected {feature.Value}" ) );
+                        return false;
+                    }
+                } else
                 {
-                    ErrorHandler.HandleException( new Exception( $"Field {feature.Key} has {array.Length} elements, expected {feature.Value}" ) );
-                    return false;
+                    if ( field.GetValue( this ) is not Array array )
+                    {
+                        ErrorHandler.HandleException( new Exception( $"Field {feature.Key} is not an array" ) );
+                        return false;
+                    }
+
+                    if ( array.Length != feature.Value )
+                    {
+                        ErrorHandler.HandleException( new Exception( $"Field {feature.Key} has {array.Length} elements, expected {feature.Value}" ) );
+                        return false;
+                    }
                 }
             }
             return true;
         }
+
 
         /// <summary>
         /// Gets the swap color used for highlighting features.
@@ -613,20 +615,23 @@ namespace SCB
         {
             // Setup the expected counts for each outfit
             OutfitTCount = new Dictionary<string, int>
-        {
-            { "bloodlust", 3 },
-            { "elegantOperative", 3 },
-            { "honorInBattle", 3 },
-            { "popstar", 3 },
-            { "zeroFour", 3 },
-            { "starbright", 3 },
-            { "risingStarAlpha", 3 },
-            { "risingStarBeta", 3 },
-            { "default1", 3 },
-            { "default2", 4 },
-            { "default3", 3 },
-            { "halloween", 3 }
-        };
+            {
+                { "bloodlust", 3 },
+                { "elegantOperative", 3 },
+                { "prince", 3 },
+                { "honorInBattle", 3 },
+                { "popstar", 3 },
+                { "zeroFour", 3 },
+                { "starbright", 3 },
+                { "risingStarAlpha", 3 },
+                { "risingStarBeta", 3 },
+                { "default1", 3 },
+                { "default2", 4 },
+                { "default3", 3 },
+                { "halloween", 3 }
+            };
+
+            Outfits = new();
 
             // Setup outfit color tolerances
             SetupOutfits();
@@ -723,14 +728,21 @@ namespace SCB
         /// <returns>True if all outfit tolerances are set correctly; otherwise, false.</returns>
         private bool CheckOutfitTCount()
         {
-            foreach ( var tCheck in Outfits.Zip( OutfitTCount, Tuple.Create ) )
+            for ( int i = 0; i < Outfits.Count; i++ )
             {
-                if ( tCheck.Item1.Item1 == tCheck.Item2.Key && tCheck.Item1.Item2.Length == tCheck.Item2.Value )
+                var outfit = Outfits[ i ];
+                int trueCount = outfit!.Item2.Length;
+
+                if ( OutfitTCount.TryGetValue( outfit.Item1, out int expectedCount ) )
                 {
-                    continue;
+                    if ( trueCount != expectedCount )
+                    {
+                        ErrorHandler.HandleException( new Exception( $"Outfit {outfit!.Item1} has {trueCount} elements, expected {expectedCount}" ) );
+                        return false;
+                    }
                 } else
                 {
-                    ErrorHandler.HandleException( new Exception( $"Outfit {tCheck.Item1.Item1} has {tCheck.Item1.Item2.Length} elements, expected {tCheck.Item2.Value}" ) );
+                    ErrorHandler.HandleException( new Exception( $"Outfit {outfit!.Item1} not found" ) );
                     return false;
                 }
             }

@@ -19,13 +19,28 @@ namespace SCB
                 Directory.CreateDirectory( FilesAndFolders.tessdataFolder );
 
                 //if this folder doesnt exist, then download the tessdata folder from the github repo
-                string url = "https://github.com/tesseract-ocr/tessdata/blob/main/eng.traineddata";
+                string url = "https://github.com/IceCoaled/IceCoaled-ColorBot/tree/master/tessdata/eng.traineddata";
                 string path = FilesAndFolders.tessEngineFile;
 
                 Task.Run( () => FilesAndFolders.DownloadFile( url, path ) );
             }
 
+            if ( !Directory.Exists( FilesAndFolders.shaderFolder ) )
+            {
+                Directory.CreateDirectory( FilesAndFolders.shaderFolder );
 
+                // If the generic shader file doesn't exist, download it from the github repo
+                string url = "https://github.com/IceCoaled/IceCoaled-ColorBot/tree/master/GenericShader.hlsl";
+                string path = FilesAndFolders.shaderFile;
+
+                Task.Run( () => FilesAndFolders.DownloadFile( url, path ) );
+
+                // Wait until the file is downloaded
+                while ( !File.Exists( path ) )
+                {
+                    Thread.Sleep( 1000 );
+                }
+            }
 
             if ( !Directory.Exists( FilesAndFolders.configFolder ) )
             {
@@ -76,9 +91,6 @@ namespace SCB
                         }
                     }
                 }
-
-
-
             }
 
 #if DEBUG
@@ -102,6 +114,7 @@ namespace SCB
 
             // start the recoil pattern thread
             Task.Run( () => RecoilPatternProcessor.RecoilPatternThread() );
+
 
 
             // To customize application configuration such as set high DPI settings or default font,

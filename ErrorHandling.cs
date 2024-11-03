@@ -1,6 +1,5 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using MaterialSkin.Controls;
-using Utils;
 
 namespace SCB
 {
@@ -75,6 +74,24 @@ namespace SCB
         }
 
 
+        /// <summary>
+        /// Checks if the object was created successfully, and if not, logs an error and closes the application.
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="obj"></param>
+        /// <param name="varName"></param>
+        /// <returns></returns>
+        internal static T? HandleObjCreation<T>( T? obj, string varName )
+        {
+            if ( object.Equals( obj, default( T ) ) )
+            {
+                ErrorHandler.HandleException( new Exception( $"Failed To Create Object: {typeof( T ).Name}, With Name: {varName}" ) );
+                return default( T );
+            }
+            return obj;
+        }
+
+
 
         /// <summary>
         /// Clears the status bar message.
@@ -114,8 +131,7 @@ namespace SCB
 
         private static void WriteToLog( string message )
         {
-            using StreamWriter writer = new( FilesAndFolders.exceptionLogFile, true );
-            writer.WriteLine( message );
+            File.AppendAllLines( Utils.FilesAndFolders.exceptionLogFile, new string[] { message } );
         }
     }
 }

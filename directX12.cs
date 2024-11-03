@@ -1,11 +1,15 @@
 ﻿using System.Drawing.Imaging;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using PInvoke;
 using Vortice.D3DCompiler;
 using Vortice.Direct3D;
+using Vortice.Direct3D11;
+using Vortice.Direct3D11on12;
 using Vortice.Direct3D12;
+using Vortice.Direct3D12.Debug;
 using Vortice.DXGI;
+using Vortice.DXGI.Debug;
 using Color = System.Drawing.Color;
 using Feature = Vortice.Direct3D12.Feature;
 
@@ -15,25 +19,27 @@ namespace SCB
     /// <summary>
     /// Manages DirectX 12 operations, including screen capture, GPU-based filtering, and resource management.
     /// </summary>
-    internal unsafe class DirectX12 : IDisposable
+    internal class DirectX12 : IDisposable
     {
         // Indicates whether the object has been disposed to prevent multiple disposals.
         private bool disposed;
 
         // Window details
-        private readonly nint hWnd;
-        private readonly PInvoke.RECT windowRect;
         private string? gpuVender;
 
         // Devices and Core Pipeline Components
-        private ID3D12Device2? device;
+        private ID3D12Device2? d3d12Device;
         private ID3D12CommandQueue? commandQueue;
         private ID3D12GraphicsCommandList2? commandList;
         private ID3D12CommandAllocator? commandAllocator;
 
-        // Swap Chain and Render Targets
-        private IDXGISwapChain3? swapChain;
-        private ID3D12Resource[] renderTargets;
+        // Dxgi interface 
+        private IDXGIAdapter1? desktopAdapter;
+        private ID3D11On12Device? d3d11On12Device;
+        private ID3D11Device? d3d11Device;
+        private IDXGIOutput? output;
+        private IDXGIOutput1? output1;
+        private IDXGIOutputDuplication? outputDuplication;
 
         // Descriptor Heaps
         private ID3D12DescriptorHeap? rtvHeap; // Render Target View Heap
@@ -44,8 +50,8 @@ namespace SCB
         private ID3D12RootSignature? rootSignature;
 
         // Staging Buffers and Resources
-        private readonly ID3D12Resource? capturedResource; // Resource for captured screen data
-        private readonly ID3D12Resource? filteredResource; // Resource for storing filtered image data
+        private ID3D12Resource? capturedResource; // Resource for captured screen data
+        private ID3D12Resource? filteredResource; // Resource for storing filtered image data
 
         // Fence and Synchronization
         private ID3D12Fence? fence;
@@ -53,8 +59,17 @@ namespace SCB
         private AutoResetEvent? fenceEvent;
 
         // Shader and Pipeline State
-        private readonly ID3D12PipelineState? initialPipelineState;
-        private readonly PixelShaderManager? shaderManager;
+        private ID3D12PipelineState? initialPipelineState;
+        private PixelShaderManager? shaderManager;
+
+        // Debug layer
+        ID3D12Debug1? debugDevice;
+        ID3D12InfoQueue1? infoQueue;
+
+        // Monitor information
+        private RECT monitorRect;
+
+
 
 
 
@@ -64,13 +79,23 @@ namespace SCB
         /// <param name="hWnd">The window handle for capturing screen data.</param>
         /// <param name="windowRect">The dimensions of the window to capture.</param>
         /// <param name="shaderPaths">A list of paths to the shader files to use for filtering.</param>
-        internal DirectX12( nint hWnd, PInvoke.RECT windowRect )
+        internal DirectX12()
         {
-            this.windowRect = windowRect;
-            this.hWnd = hWnd;
-            GetGpuVendorName();
+            // Get the monitor information
+            Screen primaryScreen = Screen.PrimaryScreen;
+            monitorRect = new RECT
+            {
+                left = primaryScreen!.Bounds.Left,
+                top = primaryScreen!.Bounds.Top,
+                right = primaryScreen!.Bounds.Right,
+                bottom = primaryScreen!.Bounds.Bottom
+            };
+
+            // Initialize the DirectX 12 device and core components
             InitD3D12();
-            shaderManager = new PixelShaderManager( device!, rootSignature!, gpuVender! );
+
+            // Create the Shader Manager to manage pixel shaders, pipleline states, and resources
+            shaderManager = ErrorHandler.HandleObjCreation( new PixelShaderManager( d3d12Device!, rootSignature!, gpuVender! ), nameof( shaderManager ) );
         }
 
 
@@ -93,10 +118,25 @@ namespace SCB
             using IDXGIFactory4 factory = DXGI.CreateDXGIFactory1<IDXGIFactory4>();
 
             // Get the first hardware adapter that supports Direct3D 12
-            IDXGIAdapter1? adapter = null;
+            desktopAdapter = null;
             for ( uint i = 0; factory.EnumAdapters1( i, out IDXGIAdapter1 tempAdapter ).Success; i++ )
             {
                 AdapterDescription1 desc = tempAdapter.Description1;
+                gpuVender = desc.VendorId switch
+                {
+                    0x10DE => "NVIDIA",
+                    0x1002 => "AMD",
+                    0x8086 => "Intel",
+                    _ => "Unknown"
+                };
+
+
+
+                if ( gpuVender == "Unknown" )
+                {
+                    tempAdapter.Dispose();
+                    continue;
+                }
 
                 // Skip the adapter if it is a software adapter
                 if ( ( desc.Flags & AdapterFlags.Software ) != 0 )
@@ -105,14 +145,14 @@ namespace SCB
                     continue;
                 }
 
-                if ( D3D12.D3D12CreateDevice( tempAdapter, FeatureLevel.Level_12_0, out ID3D12Device? featureCheckDevice ).Success )
+                if ( D3D12.D3D12CreateDevice( tempAdapter, FeatureLevel.Level_12_0, out ID3D12Device2? featureCheckDevice ).Success )
                 {
                     // Check for Mesh Shader support of at least Tier 1, this means minimum Direct3D 12 Ultimate support (12.2)
                     var featureData = new FeatureDataD3D12Options7();
                     if ( featureCheckDevice!.CheckFeatureSupport( Feature.Options7, ref featureData ) &&
                         featureData.MeshShaderTier >= MeshShaderTier.Tier1 )
                     {
-                        adapter = tempAdapter;
+                        desktopAdapter = tempAdapter;
                         featureCheckDevice.Dispose();
                         break;
                     }
@@ -124,81 +164,111 @@ namespace SCB
                 }
             }
 
-            if ( adapter == null )
+
+#if DEBUG
+            Logger.Log( $"GPU Vendor: {gpuVender}" );
+#endif
+
+            // Check if a suitable adapter was found
+            if ( desktopAdapter == null )
             {
                 ErrorHandler.HandleException( new Exception( "No suitable Direct3D 12 adapter found." ) );
             }
 
-            var result = D3D12.D3D12CreateDevice( adapter, FeatureLevel.Level_12_0, out ID3D12Device2? tempDevice );
-            if ( result.Failure )
+#if DEBUG
+            // Enable the D3D12 debug interface, before creating the device
+            // Optional: Enable GPU-based validation if available
+            if ( D3D12.D3D12GetDebugInterface<ID3D12Debug1>( out var localDevice ).Success )
+            {
+                localDevice?.EnableDebugLayer();
+                localDevice?.SetEnableGPUBasedValidation( true );
+                localDevice?.SetEnableSynchronizedCommandQueueValidation( true );
+                Logger.Log( "D3D12 Debug Layer enabled." );
+                Logger.Log( "D3D12 GPU-Based Validation enabled." );
+                debugDevice = localDevice;
+            } else
+            {
+                ErrorHandler.HandleExceptionNonExit( new Exception( "Failed to enable D3D12 Debug Layer." ) );
+            }
+#endif
+
+
+            // Create the device
+            if ( !D3D12.D3D12CreateDevice( desktopAdapter, FeatureLevel.Level_12_0, out ID3D12Device2? tempDevice ).Success )
             {
                 ErrorHandler.HandleException( new Exception( "Failed to create D3D12 device." ) );
             }
+            d3d12Device = tempDevice;
+            tempDevice = null;
 
-            device = tempDevice;
+#if DEBUG 
+            // Setup the debug layer
+            SetupDebugLayer();
+#endif
 
-            // Create Command Queue
-            commandQueue = device!.CreateCommandQueue( new CommandQueueDescription( CommandListType.Direct ) );
-
-            // Define the swap chain description
-            SwapChainDescription1 swapChainDesc = new()
+            // Create d3d11 device
+            d3d11Device = D3D11.D3D11CreateDevice( DriverType.Hardware, DeviceCreationFlags.BgraSupport, FeatureLevel.Level_11_1 );
+            if ( d3d11Device == null )
             {
-                BufferCount = 2,
-                Width = ( uint ) ( this.windowRect.right - this.windowRect.left ), // Set to the appropriate width of the window
-                Height = ( uint ) ( this.windowRect.bottom - this.windowRect.top ), // Set to the appropriate height of the window
-                Format = Format.R8G8B8A8_UNorm,
-                BufferUsage = Usage.RenderTargetOutput,
-                SwapEffect = SwapEffect.FlipDiscard,
-                SampleDescription = new SampleDescription( 1, 0 )
-            };
-
-            // Create Swap Chain
-            using ( IDXGISwapChain1 swapChain1 = factory.CreateSwapChainForHwnd( commandQueue, hWnd, swapChainDesc ) )
-            {
-                // Get the IDXGISwapChain3 for future use
-                swapChain = swapChain1.QueryInterface<IDXGISwapChain3>();
+                ErrorHandler.HandleException( new Exception( "Failed to create D3D11 device." ) );
             }
 
+            // Get the DXGI output
+            if ( !desktopAdapter.EnumOutputs( 0, out output ).Success )
+            {
+                ErrorHandler.HandleException( new Exception( "Failed to get DXGI output." ) );
+            }
+
+            // Get the DXGI output1
+            output1 = output.QueryInterface<IDXGIOutput1>();
+            if ( output1 == null )
+            {
+                ErrorHandler.HandleException( new Exception( "Failed to get DXGI output1." ) );
+            }
+
+
+            // Dispose output
+            output.Dispose();
+
+            // Create the captured and filtered resources
+            capturedResource = ErrorHandler.HandleObjCreation( d3d12Device.CreateCommittedResource( new HeapProperties( HeapType.Default ), HeapFlags.None,
+                ResourceDescription.Texture2D( Format.R8G8B8A8_UNorm, ( uint ) ( monitorRect.right - monitorRect.left ), ( uint ) ( monitorRect.bottom - monitorRect.top ), 1, 1, 1, 0, Vortice.Direct3D12.ResourceFlags.AllowUnorderedAccess ), ResourceStates.CopySource ), nameof( capturedResource ) );
+
+            filteredResource = ErrorHandler.HandleObjCreation( d3d12Device.CreateCommittedResource( new HeapProperties( HeapType.Default ), HeapFlags.None,
+                ResourceDescription.Texture2D( Format.R8G8B8A8_UNorm, ( uint ) ( monitorRect.right - monitorRect.left ), ( uint ) ( monitorRect.bottom - monitorRect.top ), 1, 1, 1, 0, Vortice.Direct3D12.ResourceFlags.AllowUnorderedAccess ), ResourceStates.Common ), nameof( filteredResource ) );
+
+
+            // Create Command Queue
+            commandQueue = ErrorHandler.HandleObjCreation( d3d12Device!.CreateCommandQueue( new CommandQueueDescription( CommandListType.Direct ) ), nameof( commandQueue ) );
+
+
             // Create Render Target View Descriptor Heap
-            rtvHeap = device.CreateDescriptorHeap( new DescriptorHeapDescription
+            rtvHeap = ErrorHandler.HandleObjCreation( d3d12Device.CreateDescriptorHeap( new DescriptorHeapDescription
             {
                 Type = DescriptorHeapType.RenderTargetView,
                 DescriptorCount = 2,
                 Flags = DescriptorHeapFlags.None
-            } );
+            } ), nameof( rtvHeap ) );
 
-            // Create Render Target Views
-            renderTargets = new ID3D12Resource[ 2 ];
-            CpuDescriptorHandle rtvHandle = rtvHeap.GetCPUDescriptorHandleForHeapStart();
-            uint rtvDescriptorSize = device.GetDescriptorHandleIncrementSize( DescriptorHeapType.RenderTargetView );
-
-            for ( uint i = 0; i < 2; i++ )
-            {
-                renderTargets[ i ] = swapChain.GetBuffer<ID3D12Resource>( i );
-                device.CreateRenderTargetView( renderTargets[ i ], null, rtvHandle );
-
-                // Move the handle to the next descriptor
-                rtvHandle.Ptr += rtvDescriptorSize;
-            }
 
             // Create Shader Resource and Unordered Access Descriptor Heaps
-            srvHeap = device.CreateDescriptorHeap( new DescriptorHeapDescription
+            srvHeap = ErrorHandler.HandleObjCreation( d3d12Device.CreateDescriptorHeap( new DescriptorHeapDescription
             {
                 Type = DescriptorHeapType.ConstantBufferViewShaderResourceViewUnorderedAccessView,
                 DescriptorCount = 1,
                 Flags = DescriptorHeapFlags.ShaderVisible
-            } );
+            } ), nameof( srvHeap ) );
 
-            uavHeap = device.CreateDescriptorHeap( new DescriptorHeapDescription
+            uavHeap = ErrorHandler.HandleObjCreation( d3d12Device.CreateDescriptorHeap( new DescriptorHeapDescription
             {
                 Type = DescriptorHeapType.ConstantBufferViewShaderResourceViewUnorderedAccessView,
                 DescriptorCount = 1,
                 Flags = DescriptorHeapFlags.ShaderVisible
-            } );
+            } ), nameof( uavHeap ) );
 
             // Create Command Allocator and Command List
-            commandAllocator = device.CreateCommandAllocator( CommandListType.Direct );
-            commandList = device.CreateCommandList<ID3D12GraphicsCommandList2>( 0, CommandListType.Direct, commandAllocator, initialPipelineState );
+            commandAllocator = ErrorHandler.HandleObjCreation( d3d12Device.CreateCommandAllocator( CommandListType.Direct ), nameof( commandAllocator ) );
+            commandList = ErrorHandler.HandleObjCreation( d3d12Device.CreateCommandList<ID3D12GraphicsCommandList2>( 0, CommandListType.Direct, commandAllocator!, initialPipelineState ), nameof( commandList ) );
 
             // Create Root Signature
             RootDescriptor rootDescriptor = new( 0, 0 ); // Register b0, Space 0
@@ -224,14 +294,63 @@ namespace SCB
                 rootParameters,
                 staticSamplers
             );
-            rootSignature = device.CreateRootSignature( rootSignatureDesc, RootSignatureVersion.Version12 );
+
+            rootSignature = ErrorHandler.HandleObjCreation( d3d12Device.CreateRootSignature( rootSignatureDesc, RootSignatureVersion.Version1 ), nameof( rootSignature ) );
 
             // Create Fence for Synchronization
-            fence = device.CreateFence( 0, FenceFlags.None );
+            fence = ErrorHandler.HandleObjCreation( d3d12Device.CreateFence( 0, Vortice.Direct3D12.FenceFlags.None ), nameof( fence ) );
             fenceValue = 1;
             fenceEvent = new AutoResetEvent( false );
+
+
+            // Get desktop duplication interface
+            outputDuplication = ErrorHandler.HandleObjCreation( output1!.DuplicateOutput( d3d11Device ), nameof( outputDuplication ) );
+
+            // Set root signature and descriptor heaps
+            commandList!.SetGraphicsRootSignature( rootSignature );
         }
 
+
+        private void SetupDebugLayer()
+        {
+            // Get debug info queue
+            infoQueue = d3d12Device!.QueryInterface<ID3D12InfoQueue1>();
+            if ( infoQueue == null )
+            {
+                ErrorHandler.HandleException( new Exception( "Failed to get debug info queue interface." ) );
+            }
+
+            // Set break on severity
+            infoQueue.SetBreakOnSeverity( MessageSeverity.Corruption, true );
+            infoQueue.SetBreakOnSeverity( MessageSeverity.Error, true );
+            infoQueue.SetBreakOnSeverity( MessageSeverity.Warning, true );
+            infoQueue.SetBreakOnSeverity( MessageSeverity.Message, true );
+
+            // Optional: Mute or unmute debug output
+            infoQueue.MuteDebugOutput = false;
+
+            //Setup Message Callback
+            Vortice.Direct3D12.Debug.ID3D12InfoQueue1.MessageCallback messageCallback = ( cat, severity, id, description ) =>
+            {
+                var currentTimeAndDate = DateTime.Now.ToString( "MM/dd/yyyy HH:mm:ss" );
+                var message = $"[{currentTimeAndDate}] \n Severity Level : {severity} \n Error Catagory: {cat} \n Error Id: {id} \n Error Description : {description}";
+                File.AppendAllText( Utils.FilesAndFolders.d3d12LogFile, message );
+            };
+
+            // Create log file if it does not exist
+            if ( !File.Exists( Utils.FilesAndFolders.d3d12LogFile ) )
+            {
+                File.Create( Utils.FilesAndFolders.d3d12LogFile ).Close();
+            }
+
+            // Register the callback
+            infoQueue.RegisterMessageCallback( messageCallback, MessageCallbackFlags.FlagNone );
+
+
+#if DEBUG
+            Logger.Log( "D3D12 Debug Setup" );
+#endif
+        }
 
 
 
@@ -258,61 +377,83 @@ namespace SCB
         /// Processes the current frame and returns the filtered result as a Bitmap.
         /// </summary>
         /// <returns>The filtered frame as a Bitmap.</returns>
-        internal unsafe Bitmap ProcessFrameAsBitmap()
+        internal unsafe void ProcessFrameAsBitmap( ref Bitmap? bitmap )
         {
             // Wait for the previous frame to complete
             WaitForPreviousFrame();
 
-            // Get the current back buffer index
-            uint backBufferIndex = swapChain!.CurrentBackBufferIndex;
-
-            // Reset the command allocator and command list
-            commandAllocator!.Reset();
-            commandList!.Reset( commandAllocator, initialPipelineState );
-
-            // Record commands to copy the back buffer to the captured resource
-            CopyBackBufferToResource( backBufferIndex );
-
-            // Apply filtering using all shaders managed by the shader manager
-            foreach ( string shaderName in shaderManager!.GetShaderNames() )
+            // Get the next frame
+            if ( !outputDuplication!.AcquireNextFrame( 10, out OutduplFrameInfo frameInfo, out IDXGIResource? desktopResource ).Success )
             {
-                ApplyFilterProcess( shaderName );
+                ErrorHandler.HandleExceptionNonExit( new Exception( "Failed to acquire next frame." ) );
+                return;
             }
 
-            // Map the filtered resource to access the filtered image data
-            void* dataPointer = null;
-            filteredResource!.Map( 0, null, &dataPointer );
+            using ( desktopResource )
+            {
 
-            // Create a Bitmap from the mapped data
-            int width = ( int ) filteredResource.Description.Width;
-            int height = ( int ) filteredResource.Description.Height;
+                // Get the texture from the shared handle
+                using ID3D12Resource? texture = desktopResource!.QueryInterface<ID3D12Resource>();
 
-            Bitmap bitmap = new( width, height, PixelFormat.Format32bppArgb );
-            BitmapData bmpData = bitmap.LockBits( new Rectangle( 0, 0, width, height ), ImageLockMode.WriteOnly, bitmap.PixelFormat );
-            IntPtr bmpDataPointer = bmpData.Scan0;
+                // Get the texture description
+                ResourceDescription textureDesc = texture!.Description;
 
-            Unsafe.Copy( dataPointer, ref bmpDataPointer );
+                // Check if the texture is valid
+                if ( textureDesc.Dimension != Vortice.Direct3D12.ResourceDimension.Texture2D ||
+                    textureDesc.Width != ( ulong ) ( monitorRect.right - monitorRect.left ) ||
+                    textureDesc.Height != ( uint ) ( monitorRect.bottom - monitorRect.top ) )
+                {
+                    ErrorHandler.HandleExceptionNonExit( new Exception( "Invalid texture." ) );
+                    return;
+                }
 
-            bitmap.UnlockBits( bmpData );
+                try
+                {
+                    // Reset the command allocator and command list, copy the desktop texture to the captured resource
+                    commandAllocator!.Reset();
+                    commandList!.Reset( commandAllocator, initialPipelineState );
+                    commandList!.CopyResource( capturedResource!, texture! );
+                } finally
+                {
+                    // Release the frame (release as early as possible)
+                    outputDuplication!.ReleaseFrame();
+                }
 
-            // Unmap the filtered resource
-            filteredResource!.Unmap( 0, null );
+                // Apply filtering using all shaders managed by the shader manager
+                foreach ( string shaderName in shaderManager!.GetShaderNames() )
+                {
+                    ApplyFilterProcess( shaderName );
+                }
 
-            return bitmap;
-        }
+                // Map the filtered resource to access the filtered image data
+                void* dataPointer = null;
+                if ( !filteredResource!.Map( 0, dataPointer ).Success )
+                {
+                    ErrorHandler.HandleExceptionNonExit( new Exception( "Failed to map filtered resource." ) );
+                    return;
+                }
+                try
+                {
+                    // Create a Bitmap from the mapped data
+                    var filterDesc = filteredResource!.Description; // changed to a chached value because vortices uses function calls to get structs
+                    int width = ( int ) filterDesc.Width;
+                    int height = ( int ) filterDesc.Height;
+                    var bitmapFormat = filterDesc.Format.GetBitsPerPixel() == 32 ? PixelFormat.Format32bppArgb : PixelFormat.Format24bppRgb;
+                    long bitmapSize = ( width * height * filterDesc.Format.GetBitsPerPixel() ) / 0x08;
 
+                    // Create a new bitmap and copy the data from the filtered resource
+                    bitmap = new( width, height, bitmapFormat );
+                    BitmapData bmpData = bitmap.LockBits( new Rectangle( 0, 0, width, height ), ImageLockMode.WriteOnly, bitmap.PixelFormat );
+                    Buffer.MemoryCopy( dataPointer, bmpData.Scan0.ToPointer(), bitmapSize, bitmapSize );
 
-
-
-        /// <summary>
-        /// Copies the current back buffer to the captured resource for further processing.
-        /// </summary>
-        /// <param name="backBufferIndex">The index of the back buffer to copy.</param>
-        private void CopyBackBufferToResource( uint backBufferIndex )
-        {
-            commandList!.ResourceBarrierTransition( renderTargets[ backBufferIndex ], ResourceStates.Present, ResourceStates.CopySource );
-            commandList!.CopyResource( capturedResource!, renderTargets[ backBufferIndex ] );
-            commandList!.ResourceBarrierTransition( renderTargets[ backBufferIndex ], ResourceStates.CopySource, ResourceStates.Present );
+                    bitmap.UnlockBits( bmpData );
+                } finally
+                {
+                    // Unmap the filtered resource
+                    filteredResource!.Unmap( 0, null );
+                    dataPointer = null;
+                }
+            }
         }
 
 
@@ -324,8 +465,8 @@ namespace SCB
         /// <param name="shaderName">The name of the shader to use for filtering.</param>
         private void ApplyFilterProcess( string shaderName )
         {
+            // Set the pipeline state for the shader
             shaderManager!.SetPipelineState( commandList!, shaderName );
-            commandList!.SetGraphicsRootSignature( rootSignature );
 
             // Set the descriptor heaps
             ID3D12DescriptorHeap[] heaps = { srvHeap!, uavHeap! };
@@ -335,11 +476,9 @@ namespace SCB
             commandList!.SetGraphicsRootDescriptorTable( 0, srvHeap!.GetGPUDescriptorHandleForHeapStart() );
             commandList!.SetGraphicsRootDescriptorTable( 1, uavHeap!.GetGPUDescriptorHandleForHeapStart() );
 
-            var shaderPipeline = shaderManager!.GetShaderPipeLine( shaderName );
-            if ( shaderPipeline.ConstantBuffer != null )
-            {
-                commandList!.SetGraphicsRootConstantBufferView( 2, shaderPipeline.ConstantBuffer!.GPUVirtualAddress );
-            }
+            // Set the constant buffer for the shader
+            var shaderPipeline = shaderManager!.GetShaderPipeLine( sp => sp?.Shader!.ShaderName == shaderName );
+            shaderPipeline?.ConstantBuffer?.Let( _ => commandList!.SetGraphicsRootConstantBufferView( 2, shaderPipeline.ConstantBuffer!.GPUVirtualAddress ) );
 
             // Record commands to filter the captured resource
             commandList!.ResourceBarrierTransition( capturedResource!, ResourceStates.CopySource, ResourceStates.NonPixelShaderResource );
@@ -349,7 +488,7 @@ namespace SCB
             // Calculate the thread group size and dispatch the shader
             // nvidia and intel will both dynamicaly use 8, 16, 32 wavefonts, amd will dynamically use 32, or 64 wavefronts.
             uint threadGroupSize = gpuVender == "AMD" ? 64u : 32u;
-            uint groupCountX = ( uint ) ( ( ( windowRect.right - windowRect.left ) + threadGroupSize - 1 ) / threadGroupSize );
+            uint groupCountX = ( uint ) ( ( ( monitorRect.right - monitorRect.left ) + threadGroupSize - 1 ) / threadGroupSize );
 
 
             commandList!.Dispatch( groupCountX, 1, 1 );
@@ -366,27 +505,6 @@ namespace SCB
             // Wait until the command queue is finished
             WaitForPreviousFrame();
         }
-
-
-
-        /// <summary>
-        /// Grabs the GPU's vendor name from the adapter description.
-        /// </summary>
-        private void GetGpuVendorName()
-        {
-            using IDXGIDevice idxgiDevice = this.device!.QueryInterface<IDXGIDevice>();
-            using IDXGIAdapter adapter = idxgiDevice.GetAdapter();
-            AdapterDescription adapterDesc = adapter.Description;
-
-            gpuVender = adapterDesc.VendorId switch
-            {
-                0x10DE => "NVIDIA",
-                0x1002 => "AMD",
-                0x8086 => "Intel",
-                _ => "Unknown"
-            };
-        }
-
 
 
         public void Dispose()
@@ -416,8 +534,51 @@ namespace SCB
                 commandAllocator?.Dispose();
                 commandList?.Dispose();
                 commandQueue?.Dispose();
-                device?.Dispose();
-                shaderManager!.Dispose();
+                d3d12Device?.Dispose();
+                shaderManager?.Dispose();
+                desktopAdapter?.Dispose();
+                d3d11Device?.Dispose();
+                output?.Dispose();
+                output1?.Dispose();
+                outputDuplication?.Dispose();
+
+#if DEBUG
+                IDXGIDebug1? liveReport = null;
+                if ( DXGI.DXGIGetDebugInterface1( out liveReport ).Success )
+                {
+                    Guid liveReportAll = new( 0x35cdd7fc, 0x13b2, 0x421d, 0xa5, 0xd7, 0x7e, 0x44, 0x51, 0x28, 0x7d, 0x64 );
+                    var file = File.Open( Utils.FilesAndFolders.d3d12LogFile, FileMode.OpenOrCreate, FileAccess.ReadWrite )!;
+                    file?.Let( _ =>
+                    {
+                        using StreamWriter sw = new( file );
+                        sw.WriteLine( "-----Live Report-----" );
+
+                        var dwConsoleOut = Console.Out;
+                        try
+                        {
+                            // Set the main output to the file
+                            Console.SetOut( sw );
+
+                            // Report live objects
+                            liveReport?.ReportLiveObjects( liveReportAll, ReportLiveObjectFlags.All );
+                        } finally
+                        {
+                            // Reset the output to the console
+                            Console.SetOut( dwConsoleOut );
+                        }
+
+                        sw.WriteLine( "-----End Live Report-----" );
+
+                        file.Close();
+                        sw.Close();
+                    }
+                    );
+                    liveReport?.Dispose();
+                }
+
+                infoQueue?.Dispose();
+                debugDevice?.Dispose();
+#endif
             }
 
             // Dispose unmanaged resources
@@ -436,7 +597,7 @@ namespace SCB
     /// for those shaders, and setting up the necessary resources to manage shader execution. It is also capable of
     /// disposing all managed and unmanaged resources used by the shaders and pipeline states.
     /// </remarks>
-    internal unsafe class PixelShaderManager : IDisposable
+    internal class PixelShaderManager : IDisposable
     {
         /// <summary>
         /// Indicates whether the object has been disposed to prevent multiple disposals.
@@ -509,18 +670,23 @@ namespace SCB
         /// </summary>
         private void InitShaders()
         {
+            // Read the raw shader code from the file
             ReadShaderCode( out string shaderCode );
 
+            // instantiate the color tolerances classes
             using var outfits = new OutfitColorTolerances();
             using var features = new CharacterFeatureTolerances();
 
             // We know there will be 3 shaders currently, character features, outfits, and outlines. so this will be hardcoded for now.
             for ( int i = 0; i < 3; i++ )
             {
+                // Get the shader name based on the index
                 string shaderName = i == 0 ? "features" : i == 1 ? "outfits" : "outlines";
 
+                // Get the swap color based on the index
                 Color swapColor = i == 0 ? features.GetSwapColor() : i == 1 ? outfits.GetSwapColor() : ColorTolerances.GetSwapColor();
 
+                // Get the color tolerance details based on the shader name
                 List<Tuple<string, ColorTolerance[]>?> toleranceDetails = shaderName.CompareTo( "features" ) == 0
                 ? features.GetCharacterFeatures()
                 : shaderName.CompareTo( "outfits" ) == 0
@@ -530,20 +696,31 @@ namespace SCB
                         new( "outlines", new[] { ColorTolerances.GetColorTolerance() })
                     };
 
+                // Create the shader 
+                Shader? shader = ErrorHandler.HandleObjCreation( new Shader( shaderName, shaderCode, toleranceDetails, swapColor, gpuVendor ), $"{shaderName}" + nameof( shader ) );
+
+                // Create the constant buffer for the shader
+                var constantBuffer = CreateConstantBuffer( ref shader );
+
+                // Create the pipeline state for the shader
+                ID3D12PipelineState? pipelineState = ErrorHandler.HandleObjCreation( CreatePipelineState( ref shader!.RefCompiledShader()! ), nameof( pipelineState ) );
 
 
-                Shader tempShader = new( shaderName, shaderCode, toleranceDetails, swapColor, gpuVendor );
-                ID3D12Resource constantBuffer = CreateConstantBuffer( ref tempShader );
-                ID3D12PipelineState pipelineState = CreatePipelineState( ref tempShader.RefCompiledShader()! );
-
-                shaderPipelines.Add( new ShaderPipeline( tempShader, pipelineState, constantBuffer ) );
+                // Create the shader pipeline, and add it to the list
+                shaderPipelines.Add( new ShaderPipeline( shader, pipelineState, constantBuffer ) );
             }
         }
 
-        private ID3D12Resource CreateConstantBuffer( ref Shader shader )
-        {
 
-            shader.SetupColorRanges( out ColorRanges colorRanges );
+        /// <summary>
+        /// Creates a constant buffer for the specified shader.
+        /// </summary>
+        /// <param name="shader"></param>
+        /// <returns>Buffer resource</returns>
+        private unsafe (ID3D12Resource?, ID3D12DescriptorHeap?) CreateConstantBuffer( ref Shader? shader )
+        {
+            // Setup the color ranges for the constant buffer
+            shader!.SetupColorRanges( out ColorRanges colorRanges );
             if ( colorRanges.NumOfRanges == 0 )
             {
                 ErrorHandler.HandleException( new Exception( "No color ranges found." ) );
@@ -551,24 +728,26 @@ namespace SCB
 
             int constBufferSize = Marshal.SizeOf<ColorRanges>();
 
-            var constantBuffer = device.CreateCommittedResource( new HeapProperties( HeapType.Upload ), HeapFlags.None,
-               ResourceDescription.Buffer( ( ulong ) constBufferSize, ResourceFlags.None ), ResourceStates.GenericRead );
+            // Create a constant buffer for the color ranges
+            ID3D12Resource? constantBuffer = ErrorHandler.HandleObjCreation( device.CreateCommittedResource( new HeapProperties( HeapType.Upload ), HeapFlags.None,
+               ResourceDescription.Buffer( ( ulong ) constBufferSize, Vortice.Direct3D12.ResourceFlags.None ), ResourceStates.GenericRead ), nameof( constantBuffer ) );
 
-            Vortice.Direct3D12.Range writeRange = new( 0, 0 );
+            // Map the constant buffer
             void* mappedData = null;
-            constantBuffer.Map( 0, writeRange, &mappedData ).CheckError();
-            if ( mappedData == null )
+            if ( !constantBuffer!.Map( 0, mappedData ).Success )
             {
                 ErrorHandler.HandleException( new Exception( "Failed to map constant buffer." ) );
+                return default;
             }
 
-            // Copy the color ranges to the constant buffer            
-            Unsafe.Copy( mappedData, ref colorRanges );
+            // Copy the color ranges to the constant buffer
+            Buffer.MemoryCopy( &colorRanges, mappedData, constBufferSize, constBufferSize );
 
             // Unmap the constant buffer
-            constantBuffer.Unmap( 0, writeRange );
+            constantBuffer.Unmap( 0 );
+            mappedData = null;
 
-
+            // Create a descriptor heap for the constant buffer
             DescriptorHeapDescription cbvHeapDesc = new()
             {
                 Type = DescriptorHeapType.ConstantBufferViewShaderResourceViewUnorderedAccessView,
@@ -576,21 +755,20 @@ namespace SCB
                 Flags = DescriptorHeapFlags.ShaderVisible
             };
 
-            var cbvHeap = device.CreateDescriptorHeap( cbvHeapDesc );
-            if ( cbvHeap == null )
-            {
-                ErrorHandler.HandleException( new Exception( "Failed to create constant buffer descriptor heap." ) );
-            }
+            // Create the descriptor heap
+            ID3D12DescriptorHeap? cbvHeap = ErrorHandler.HandleObjCreation( device.CreateDescriptorHeap( cbvHeapDesc ), nameof( cbvHeap ) );
 
+            // Create a constant buffer view description
             ConstantBufferViewDescription cbvDesc = new()
             {
                 BufferLocation = constantBuffer.GPUVirtualAddress,
                 SizeInBytes = ( uint ) ( ( constBufferSize + 255 ) & ~255 )
             };
 
-            device.CreateConstantBufferView( cbvDesc, cbvHeap.GetCPUDescriptorHandleForHeapStart() );
+            // Create a constant buffer view
+            device.CreateConstantBufferView( cbvDesc, cbvHeap!.GetCPUDescriptorHandleForHeapStart() );
 
-            return constantBuffer;
+            return (constantBuffer, cbvHeap);
         }
 
 
@@ -599,8 +777,9 @@ namespace SCB
         /// </summary>
         /// <param name="shader">The compiled shader Blob.</param>
         /// <returns>An ID3D12PipelineState object representing the created pipeline state.</returns>
-        private ID3D12PipelineState CreatePipelineState( ref Blob shader )
+        private ID3D12PipelineState? CreatePipelineState( ref Blob shader )
         {
+            // Create the pipeline state description
             GraphicsPipelineStateDescription pipelineDesc = new()
             {
                 RootSignature = rootSignature,
@@ -609,11 +788,12 @@ namespace SCB
                 RenderTargetFormats = new[] { Format.R8G8B8A8_UNorm },
                 SampleDescription = new SampleDescription( 1, 0 ),
                 PrimitiveTopologyType = PrimitiveTopologyType.Triangle,
-                RasterizerState = RasterizerDescription.CullNone,
-                BlendState = BlendDescription.Opaque,
-                DepthStencilState = DepthStencilDescription.None
+                RasterizerState = Vortice.Direct3D12.RasterizerDescription.CullNone,
+                BlendState = Vortice.Direct3D12.BlendDescription.Opaque,
+                DepthStencilState = Vortice.Direct3D12.DepthStencilDescription.None
             };
 
+            // Return the created pipeline state
             return device.CreateGraphicsPipelineState( pipelineDesc );
         }
 
@@ -624,14 +804,8 @@ namespace SCB
         /// <param name="shaderName">The name of the shader whose pipeline state is to be set.</param>
         internal void SetPipelineState( ID3D12GraphicsCommandList commandList, string shaderName )
         {
-            var shaderPipeline = shaderPipelines.Find( sp => sp.Shader.ShaderName == shaderName );
-            if ( shaderPipeline == null )
-            {
-                ErrorHandler.HandleExceptionNonExit( new ArgumentException( $"Shader '{shaderName}' not found." ) );
-                return;
-            }
 
-            commandList.SetPipelineState( shaderPipeline.PipelineState );
+            commandList.SetPipelineState( GetShaderPipeLine( sp => sp?.Shader!.ShaderName == shaderName )!.PipelineState );
         }
 
         /// <summary>
@@ -639,9 +813,9 @@ namespace SCB
         /// </summary>
         /// <param name="shaderName">The name of the shader whose pipeline is to be retrieved.</param>
         /// <returns>The ShaderPipeline object associated with the specified shader name.</returns>
-        internal ShaderPipeline GetShaderPipeLine( string shaderName )
+        internal ShaderPipeline? GetShaderPipeLine( Predicate<ShaderPipeline?> match )
         {
-            return shaderPipelines.First( sp => sp.Shader.ShaderName == shaderName );
+            return shaderPipelines.Find( match )!;
         }
 
         /// <summary>
@@ -650,8 +824,9 @@ namespace SCB
         /// <returns>An array of shader names.</returns>
         internal string[] GetShaderNames()
         {
-            return shaderPipelines.Select( sp => sp.Shader.ShaderName ).ToArray();
+            return shaderPipelines.Select( sp => sp.Shader!.ShaderName ).ToArray();
         }
+
 
         public void Dispose()
         {
@@ -670,7 +845,6 @@ namespace SCB
                 foreach ( var shaderPipeline in shaderPipelines )
                 {
                     shaderPipeline.Dispose();
-
                 }
             }
 
@@ -688,18 +862,22 @@ namespace SCB
         /// The shader class that holds the shader name and compiled shader Blob.
         /// Also the color tolerance values for the shader.
         /// </summary>
-        internal Shader Shader { get; private set; }
-
+        internal Shader? Shader { get; private set; }
 
         /// <summary>
         /// The constant buffer associated with the shader it holds the color tolerance values.
         /// </summary>
-        internal ID3D12Resource ConstantBuffer { get; private set; }
+        internal ID3D12Resource? ConstantBuffer { get; private set; }
+
+        /// <summary>
+        /// The descriptor heap for the constant buffer.
+        /// </summary>
+        internal ID3D12DescriptorHeap? ConstantBufferHeap { get; private set; }
 
         /// <summary>
         /// The pipeline state associated with the shader.
         /// </summary>
-        internal ID3D12PipelineState PipelineState { get; private set; }
+        internal ID3D12PipelineState? PipelineState { get; private set; }
 
         /// <summary>
         /// Initializes a new instance of the ShaderPipeline class.
@@ -707,11 +885,12 @@ namespace SCB
         /// <param name="shader">The name of the shader.</param>
         /// <param name="pipelineState">The pipeline state associated with the shader.</param>
         /// 
-        internal ShaderPipeline( Shader shader, ID3D12PipelineState pipelineState, ID3D12Resource constantBuffer )
+        internal ShaderPipeline( Shader? shader, ID3D12PipelineState? pipelineState, (ID3D12Resource?, ID3D12DescriptorHeap?) constantBuffer )
         {
-            Shader = shader;
-            PipelineState = pipelineState;
-            ConstantBuffer = constantBuffer;
+            Shader = shader!;
+            PipelineState = pipelineState!;
+            ConstantBuffer = constantBuffer.Item1!;
+            ConstantBufferHeap = constantBuffer.Item2!;
         }
 
         ~ShaderPipeline()
@@ -730,9 +909,10 @@ namespace SCB
             if ( disposing &&
                 !disposed )
             {
-                PipelineState.Dispose();
-                Shader.Dispose();
-                ConstantBuffer.Dispose();
+                PipelineState!.Dispose();
+                Shader!.Dispose();
+                ConstantBuffer!.Dispose();
+                ConstantBufferHeap!.Dispose();
             }
 
             disposed = true;
@@ -761,6 +941,9 @@ namespace SCB
         /// </summary>
         internal string? ShaderCode { get; private set; }
 
+        /// <summary>
+        /// Compiled shader Blob.
+        /// </summary>
         private Blob? compiledShader;
 
         /// <summary>
@@ -977,5 +1160,17 @@ namespace SCB
         public Uint4 SwapColor = swapColor;
     }
 
-
+    /// <summary>
+    /// Nullable extensions for easy null checking with pushing an action based on the object being not null
+    /// </summary>
+    public static class NullableExtensions
+    {
+        public static void Let<T>( this T? obj, Action<T> action ) where T : class
+        {
+            if ( obj != null )
+            {
+                action( obj );
+            }
+        }
+    }
 }

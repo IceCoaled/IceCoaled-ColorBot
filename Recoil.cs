@@ -276,73 +276,6 @@ namespace Recoil
         }
 
         /// <summary>
-        /// Reads a recoil pattern from a text file based on the given format.
-        /// </summary>
-        public static RecoilPattern ReadFromFile( string filePath )
-        {
-            List<PointF> positions = new();
-            List<double> timeOfPoint = new();
-
-            using ( StreamReader reader = new( filePath ) )
-            {
-                string? line;
-                while ( ( line = reader.ReadLine() ) != null )
-                {
-                    if ( line.StartsWith( "Position:" ) )
-                    {
-                        // Extract X, Y, and Time
-                        string[] parts = line.Split( new[] { 'X', 'Y', '=', ',', '{', '}', ' ' }, StringSplitOptions.RemoveEmptyEntries );
-                        float x = float.Parse( parts[ 1 ] );
-                        float y = float.Parse( parts[ 2 ] );
-                        double time = double.Parse( parts[ 4 ] );
-
-                        // Add the position and time to the lists
-                        positions.Add( new PointF( x, y ) );
-                        timeOfPoint.Add( time );
-
-                    }
-                }
-            }
-
-            // Create a dictionary to store the pattern
-            Dictionary<PointF, double> pattern = new();
-
-
-            // Add the positions and time to the pattern
-            for ( int i = 0; i < positions.Count; i++ )
-            {
-                pattern.Add( positions[ i ], timeOfPoint[ i ] );
-            }
-
-            return new RecoilPattern( pattern );
-        }
-
-        /// <summary>
-        /// Averages multiple recoil patterns into a single pattern.
-        /// </summary>
-        internal static RecoilPattern AveragePatterns( List<RecoilPattern> patterns )
-        {
-            // Use the pattern with the least positions, to avoid out of range exceptions
-            int length = patterns.Min( p => p.Pattern.Count );
-
-            Dictionary<PointF, double> averagedPattern = new();
-
-            for ( int i = 0; i < length; i++ )
-            {
-                // Calculate the average X and Y positions, and corresponding time of the points
-                float avgX = patterns.Select( pattern => pattern[ i ].X ).Average();
-                float avgY = patterns.Select( pattern => pattern[ i ].Y ).Average();
-                double avgTime = patterns.Select( pattern => pattern.Pattern[ pattern[ i ] ] ).Average();
-
-
-                // Add the averaged position and time to the pattern
-                averagedPattern.Add( new PointF( avgX, avgY ), avgTime );
-            }
-
-            return new RecoilPattern( averagedPattern );
-        }
-
-        /// <summary>
         /// Refactors the pattern based on the current game window size.
         /// </summary>
         internal RecoilPattern RefactorPatternForWindowSize( ref float scaleX, ref float scaleY )
@@ -360,34 +293,6 @@ namespace Recoil
 
             return new RecoilPattern( refactoredPattern );
         }
-
-
-        // Operator overload to acces specific PointF in the dictionary, based of time
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="time"></param>
-        /// <returns></returns>
-        /// <exception cref="KeyNotFoundException"></exception>
-        internal PointF this[ double time ]
-        {
-            // Get PointF based on time, with plus or minus 50milliseconds
-            get
-            {
-                var point = Pattern.FirstOrDefault( p => p.Value >= time - 50 && p.Value <= time + 50 );
-                if ( point.Key == default )
-                {
-                    ErrorHandler.HandleException( new KeyNotFoundException( "No point found for the given time" ) );
-                }
-
-                // Return default PointF if no point is found
-                return default;
-            }
-        }
-
-
-
 
 
         public void Dispose()
@@ -411,6 +316,7 @@ namespace Recoil
     internal static class RecoilPatternProcessor
     {
         private static Dictionary<string, RecoilPattern> patternDatabase = new();
+        private static readonly object databaseLock = new();
 
         //original window size is static at 1440x2560       
         private static PInvoke.RECT originalWindowRect = new() { left = 0, top = 0, right = 2560, bottom = 1440 };
@@ -424,15 +330,15 @@ namespace Recoil
         /// <summary>
         /// Processes all patterns for each gun folder in the main directory, averages them, and stores them in the database.
         /// </summary>
-        internal static void ProcessAllGunPatterns()
+        internal static unsafe void ProcessAllGunPatterns()
         {
             // Get all subdirectories (which represent each gun folder)
             string[] gunFolders = Directory.GetDirectories( FilesAndFolders.recoilPatterns );
 
-            foreach ( string gunFolder in gunFolders )
+            Parallel.ForEach( gunFolders, gunFolder =>
             {
                 ProcessGunPatterns( gunFolder );
-            }
+            } );
         }
 
         /// <summary>
@@ -445,17 +351,128 @@ namespace Recoil
             for ( int i = 1; i < 4; i++ )
             {
                 string patternFile = Path.Combine( gunFolder, $"{Path.GetFileName( gunFolder )}-{i}.txt" );
-                RecoilPattern pattern = RecoilPattern.ReadFromFile( patternFile );
-                patterns.Add( pattern );
+
+
+                patterns.Add( ReadFromFile( patternFile ) );
 
 #if DEBUG
                 Logger.Log( $"Processed pattern: {patternFile}" );
 #endif
+
+                if ( patternFile == "./recoil/patterns\\CRUSADER\\CRUSADER-3.txt" )
+                {
+                    continue; //< debug
+                }
             }
 
-            RecoilPattern averagedPattern = RecoilPattern.AveragePatterns( patterns );
-            patternDatabase[ Path.GetFileName( gunFolder ) ] = averagedPattern;
+            while ( Monitor.TryEnter( RecoilPatternLock, 2000 ) == false )
+            {
+                Thread.Sleep( 1 );
+                lock ( databaseLock )
+                {
+                    patternDatabase[ Path.GetFileName( gunFolder ) ] = AveragePatterns( patterns );
+                }
+            }
         }
+
+
+        /// <summary>
+        /// Reads a recoil pattern from a text file based on the given format.
+        /// </summary>
+        public static RecoilPattern ReadFromFile( string filePath )
+        {
+
+            // Create a dictionary to store the pattern
+            Dictionary<PointF, double> pattern = new();
+
+            try
+            {
+                using ( StreamReader reader = new( filePath ) )
+                {
+                    string? line;
+
+                    while ( ( line = reader.ReadLine() ) != null )
+                    {
+                        try
+                        {
+                            if ( line.StartsWith( "Position:" ) )
+                            {
+                                // Extract X, Y, and Time
+                                string[] parts = line.Split( new[] { 'X', 'Y', '=', ',', '{', '}', ' ' }, StringSplitOptions.RemoveEmptyEntries );
+                                float x = float.Parse( parts[ 1 ] );
+                                float y = float.Parse( parts[ 2 ] );
+                                double time = double.Parse( parts[ 4 ] );
+
+                                if ( pattern.ContainsKey( new PointF( x, y ) ) )
+                                {
+                                    continue;
+                                } else
+                                {
+                                    // Add the position and time to the lists
+                                    if ( !pattern.TryAdd( new PointF( x, y ), time ) )
+                                    {
+                                        ErrorHandler.HandleException( new Exception( "Failed to add position to pattern" ) );
+                                    }
+                                }
+                                Thread.Sleep( 1 ); // Dont pin the CPU
+                            }
+
+                        } catch ( FormatException ex )
+                        {
+                            ErrorHandler.HandleException( ex );
+                        } catch ( IndexOutOfRangeException ex )
+                        {
+                            ErrorHandler.HandleException( ex );
+                        }
+                    }
+                }
+            } catch ( IOException ex )
+            {
+                ErrorHandler.HandleException( ex );
+            }
+
+            return new RecoilPattern( pattern );
+        }
+
+
+        /// <summary>
+        /// Averages multiple recoil patterns into a single pattern.
+        /// </summary>
+        internal static RecoilPattern AveragePatterns( List<RecoilPattern> patterns )
+        {
+            // Use the pattern with the least positions, to avoid out of range exceptions
+            // We know there is only 3 patterns, so we can hardcode it
+            int length = patterns.Min( p => p.Pattern.Count );
+
+            Dictionary<PointF, double> averagedPattern = new();
+
+            for ( int i = 0; i < length; i++ )
+            {
+                float cumulX = 0;
+                float cumulY = 0;
+                double cumulTime = 0;
+
+                cumulX = ( patterns[ 0 ].Pattern.ElementAt( i ).Key.X + patterns[ 1 ].Pattern.ElementAt( i ).Key.X + patterns[ 2 ].Pattern.ElementAt( i ).Key.X ) / 3;
+                cumulY = ( patterns[ 0 ].Pattern.ElementAt( i ).Key.Y + patterns[ 1 ].Pattern.ElementAt( i ).Key.Y + patterns[ 2 ].Pattern.ElementAt( i ).Key.Y ) / 3;
+                cumulTime = ( patterns[ 0 ].Pattern.ElementAt( i ).Value + patterns[ 1 ].Pattern.ElementAt( i ).Value + patterns[ 2 ].Pattern.ElementAt( i ).Value ) / 3;
+
+                // Look to see if the key already exists
+                if ( averagedPattern.ContainsKey( new PointF( cumulX, cumulY ) ) )
+                {
+                    continue;
+                } else
+                {
+                    averagedPattern.TryAdd( new PointF( cumulX, cumulY ), cumulTime );
+                }
+
+                Thread.Sleep( 1 ); // Dont pin the CPU
+            }
+
+
+            return new RecoilPattern( averagedPattern );
+        }
+
+
 
         /// <summary>
         /// Retrieves the recoil pattern for a specific gun.

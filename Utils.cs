@@ -26,18 +26,22 @@ namespace Utils
 
         internal const string enemyScansFolder = @"./debug/enemyscans/";
 
-        internal const string recoilFolder = @"./recoil/";
+        internal const string recoilFolder = @"./recoil";
 
-        internal const string recoilPatterns = @"./recoil/patterns/";
+        internal const string recoilPatterns = @"./recoil/patterns";
+
+        internal const string shaderFolder = @"./shaders";
 
         //Files
         internal const string recoilPatternFile = @"./recoil/RecoilPattern.txt";
 
         internal const string exceptionLogFile = @"./debug/exceptionLog.txt";
 
+        internal const string d3d12LogFile = @"./debug/d3d12Log.txt";
+
         internal const string tessEngineFile = @"./tessdata/eng.traineddata";
 
-        internal const string shaderFile = @"./shaderfiles/shader.hlsl";
+        internal const string shaderFile = @"./shaders/GenericShader.hlsl";
 
         internal static readonly string gameSettingsFile = Path.Combine( Environment.GetFolderPath( Environment.SpecialFolder.LocalApplicationData ), @"Spectre\Saved\Config\WindowsClient\GameUserSettings.ini" );
 

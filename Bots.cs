@@ -47,6 +47,8 @@ namespace SCB
         // buffer for the aimbot
         private static readonly PingPongBuffer<EnemyData> enemyBuffer = new( 10 );  // Buffer size is 10 frames
 
+        // Dx12 class for capturing and filtering screen images
+        private static DirectX12 directX12;
 
 
         /// <summary>
@@ -120,8 +122,8 @@ namespace SCB
                     if ( AntiRecoil && activateAntiRecoil )
                     {
                         double elapsed = recoilTimer.Elapsed.TotalMilliseconds;
-                        float recoilX = centerOfGameWindow.X - recoilPattern[ elapsed ].X;
-                        float recoilY = centerOfGameWindow.Y - recoilPattern[ elapsed ].Y;
+                        float recoilX = centerOfGameWindow.X - recoilPattern.Pattern.ElementAtOrDefault( ( int ) elapsed ).Key.X;
+                        float recoilY = centerOfGameWindow.Y - recoilPattern.Pattern.ElementAtOrDefault( ( int ) elapsed ).Key.Y;
 
                         // Check if return values arent default( if recoilX = centerOfGameWindow.X, or recoilY = centerOfGameWindow.Y, then the pattern is empty)
                         if ( recoilX == centerOfGameWindow.X && recoilY == centerOfGameWindow.Y )
@@ -193,14 +195,18 @@ namespace SCB
                 }
 
 
-                //capture the screen and filter, and scan for enemies
-                enemies = ScreenCap.CaptureAndFilter( ref screenCap );
+                directX12.ProcessFrameAsBitmap( ref screenCap );
 
-                //if the screen capture is null, continue
-                if ( screenCap == null )
+                if ( screenCap != null )
                 {
+                    string randomNum = new Random().Next( 0, 1000000 ).ToString() + ".png";
+                    screenCap.Save( Utils.FilesAndFolders.enemyScansFolder + randomNum );
+                } else
+                {
+                    Utils.Watch.MicroSleep( 1000 );
                     continue;
                 }
+
 
                 //if there are no enemies, clear the write buffer.
                 //Check if aimbot is invoked, if not, clear the read buffer
@@ -348,7 +354,11 @@ namespace SCB
         /// <param name="screenCap"></param>
         internal static void Start( PInvoke.RECT rect )
         {
+
             gameRect = rect;
+
+            // Initialize DirectX12 for screen capture
+            directX12 = new DirectX12();
 
             centerOfGameWindow = new Point
             {
@@ -399,11 +409,12 @@ namespace SCB
 
             if ( enemyScannerThread != null )
             {
-                enemeyCancellation.Cancel();
+                enemeyCancellation?.Cancel();
                 enemyScannerThread.Join();
             }
 
-            enemeyCancellation.Dispose();
+            enemeyCancellation?.Dispose();
+            directX12?.Dispose();
 
             OnNewFrameCaptured -= ProcessNewFrame;
 #if DEBUG

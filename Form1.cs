@@ -502,20 +502,7 @@ namespace SCB
 
         private void Exit( object? sender, EventArgs e )
         {
-            trayIcon.Visible = false;
-
-            AimBot.CleanUp();
-            activeGameCancellation.Cancel();
-            isGameActive.Join();
-            activeGameCancellation.Dispose();
-            smartKey.Join();
-            RecoilPatternProcessor.RecoilPatternSource.Cancel();
-            RecoilPatternProcessor.RecoilPatternSource.Dispose();
-#if GETRECOILPATTERN
-            recoilPatternCapture?.StopMonitoring();
-            recoilPatternCapture?.Dispose();
-#endif
-            Application.Exit();
+            OnFormClosed( new( CloseReason.UserClosing ) );
         }
 
         private void ReOpen( object? sender, EventArgs e )
@@ -542,21 +529,18 @@ namespace SCB
                 RecoilPatternProcessor.RecoilPatternSource.Cancel();
                 RecoilPatternProcessor.RecoilPatternSource.Dispose();
             }
-            if ( trayIcon != null )
-            {
-                trayIcon.Visible = false;
-                trayIcon.Dispose();
-            }
 
-            if ( bezierForm != null )
-            {
-                bezierForm.Dispose();
-            }
+#if GETRECOILPATTERN
+            recoilPatternCapture?.StopMonitoring();
+            recoilPatternCapture?.Dispose();
+#endif
 
-            if ( configurationsForm != null )
-            {
-                configurationsForm.Dispose();
-            }
+
+            trayIcon.Visible = false;
+            trayIcon.Dispose();
+            bezierForm?.Dispose();
+            configurationsForm?.Dispose();
+
             AimBot.CleanUp();
             Logger.CleanUp();
             base.OnFormClosed( e );
@@ -716,16 +700,24 @@ namespace SCB
 
         private void materialButton1_Click( object? sender, EventArgs e )
         {
-            Utils.Watch.StartCaptureWatch();
-            AimBot.Start( PlayerData.GetRect() );
 
 #if DEBUG
 #if GETRECOILPATTERN
             var gameRect = PlayerData.GetRect();
             string colorCode = "#F27AEB";
             recoilPatternCapture = new( ref gameRect, colorCode );
+            recoilPatternCapture.StartMonitoring();
+            Logger.Log( "Recoil Pattern Capture Enabled" );
+#else
+            Logger.Log( "Recoil Pattern Capture Disabled" );
+            Utils.Watch.StartCaptureWatch();
+            AimBot.Start( PlayerData.GetRect() );
 #endif
+#else
+            Utils.Watch.StartCaptureWatch();
+            AimBot.Start( PlayerData.GetRect() );
 #endif
+
         }
 
         private void materialButton2_Click( object? sender, EventArgs e )
@@ -766,38 +758,10 @@ namespace SCB
             PlayerData.SetDeadzone( newValue );
         }
 
-        void UnhandledExceptionTrapper( object sender, UnhandledExceptionEventArgs e )
+        void UnhandledExceptionTrapper( object? sender, UnhandledExceptionEventArgs e )
         {
-
-            if ( isGameActive != null &&
-                isGameActive.IsAlive )
-            {
-                activeGameCancellation.Cancel();
-                isGameActive.Join();
-                smartKey.Join();
-                activeGameCancellation.Dispose();
-                RecoilPatternProcessor.RecoilPatternSource.Cancel();
-                RecoilPatternProcessor.RecoilPatternSource.Dispose();
-            }
-            if ( trayIcon != null )
-            {
-                trayIcon.Visible = false;
-                trayIcon.Dispose();
-            }
-
-            if ( bezierForm != null )
-            {
-                bezierForm.Dispose();
-            }
-
-            if ( configurationsForm != null )
-            {
-                configurationsForm.Dispose();
-            }
-
-            AimBot.CleanUp();
-            Logger.CleanUp();
-            Application.Exit();
+            ErrorHandler.HandleExceptionNonExit( e.ExceptionObject as Exception );
+            OnFormClosed( new FormClosedEventArgs( CloseReason.ApplicationExitCall ) );
         }
 
         private void materialSwitch1_CheckedChanged( object sender, EventArgs e )

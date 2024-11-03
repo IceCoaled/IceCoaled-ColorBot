@@ -47,6 +47,7 @@
     <PackageReference Include="PInvoke.Windows.Core" Version="0.7.124" />
     <PackageReference Include="Tesseract" Version="5.2.0" />
     <PackageReference Include="Vortice.D3DCompiler" Version="3.6.2" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.6.2" />
     <PackageReference Include="Vortice.Direct3D12" Version="3.6.2" />
   </ItemGroup>
 
