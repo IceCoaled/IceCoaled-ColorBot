@@ -48,7 +48,7 @@ namespace SCB
         private static readonly PingPongBuffer<EnemyData> enemyBuffer = new( 10 );  // Buffer size is 10 frames
 
         // Dx12 class for capturing and filtering screen images
-        private static DirectX12 directX12;
+        private static DirectX11 directX11;
 
 
         /// <summary>
@@ -195,7 +195,7 @@ namespace SCB
                 }
 
 
-                directX12.ProcessFrameAsBitmap( ref screenCap );
+                directX11.ProcessFrameAsBitmap( ref screenCap );
 
                 if ( screenCap != null )
                 {
@@ -358,7 +358,7 @@ namespace SCB
             gameRect = rect;
 
             // Initialize DirectX12 for screen capture
-            directX12 = new DirectX12();
+            directX11 = new DirectX11();
 
             centerOfGameWindow = new Point
             {
@@ -414,7 +414,7 @@ namespace SCB
             }
 
             enemeyCancellation?.Dispose();
-            directX12?.Dispose();
+            directX11?.Dispose();
 
             OnNewFrameCaptured -= ProcessNewFrame;
 #if DEBUG
