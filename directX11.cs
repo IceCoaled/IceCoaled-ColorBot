@@ -1,11 +1,15 @@
-﻿using System.Drawing.Imaging;
+﻿using System.Collections.Immutable;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
+using System.Text;
 using Vortice.D3DCompiler;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
+using Vortice.Direct3D11.Debug;
 using Vortice.DXGI;
-using Color = System.Drawing.Color;
+
+
+
 
 
 namespace SCB
@@ -23,17 +27,21 @@ namespace SCB
 
         // D3D12 device and core components
         private ID3D11Device? d3d11Device;
-        private ID3D11Device1? d3d11Device1;
         private ID3D11DeviceContext? d3d11Context;
 
         // Resources
         private ID3D11UnorderedAccessView? uav;
         private ID3D11ShaderResourceView? srv;
 
+        // Shader resources
+        string? rawShaderCode;
+        private Blob? shaderBlob;
+        private ID3D11ComputeShader? computeShader;
+
         // Buffers
-        private ID3D11Buffer? constantBuffer;
-        private ID3D11Buffer? inputBuffer;
-        private ID3D11Buffer? outputBuffer;
+        private ID3D11Texture2D? inputBuffer;
+        private ID3D11Texture2D? outputBuffer;
+        private ID3D11Texture2D? stagingBuffer;
 
 
         // Dxgi interface for desktop duplication 
@@ -42,9 +50,12 @@ namespace SCB
         private IDXGIOutput1? output1;
         private IDXGIOutputDuplication? outputDuplication;
 
+        // Debug info queue
+        private ID3D11InfoQueue? infoQueue;
+        private ID3D11Debug d3d11Debug;
 
         // Shader management
-        private PixelShaderManager? shaderManager;
+        private readonly ConstantBufferManager? bufferManager;
 
         // Monitor information
         private readonly uint monitorWidth;
@@ -57,10 +68,7 @@ namespace SCB
         /// <summary>
         /// Initializes a new instance of the DirectX12 class.
         /// </summary>
-        /// <param name="hWnd">The window handle for capturing screen data.</param>
-        /// <param name="windowRect">The dimensions of the window to capture.</param>
-        /// <param name="shaderPaths">A list of paths to the shader files to use for filtering.</param>
-        internal DirectX11()
+        internal DirectX11( ref ColorToleranceManager toleranceManager )
         {
             // Get the monitor information
             Screen? primaryScreen = Screen.PrimaryScreen;
@@ -70,11 +78,14 @@ namespace SCB
             // Initialize the DirectX 12 device and core components
             InitD3D12();
 
-            // Create the Shader Manager to manage pixel shaders, pipleline states, and resources
-            shaderManager = ErrorHandler.HandleObjCreation( new PixelShaderManager( d3d11Device!, gpuVender! ), nameof( shaderManager ) );
+            // Create the Shader 
+            ReadShaderCodeFromFile();
+            EditShaderCodeVariables();
+            CompileAndCreateShaderFromFile();
+
+            // Create the constant buffer manager
+            bufferManager = new( ref toleranceManager, ref d3d11Device! );
         }
-
-
 
 
         ~DirectX11()
@@ -83,29 +94,29 @@ namespace SCB
         }
 
 
-
-
         /// <summary>
         /// Initializes the DirectX 12 device, command queue, swap chain, descriptor heaps, and other components.
         /// </summary>
         private void InitD3D12()
         {
 
-            // Create featurelevel array
-            FeatureLevel[] featureLevel =
-            [
-                FeatureLevel.Level_12_0,
-                FeatureLevel.Level_11_1,
-                FeatureLevel.Level_11_0
-            ];
+            var featureLvls = new FeatureLevel[ 5 ];
+
+            // Set the feature levels we want to use
+            featureLvls[ 0 ] = FeatureLevel.Level_11_0;
+            featureLvls[ 1 ] = FeatureLevel.Level_11_1;
+            featureLvls[ 2 ] = FeatureLevel.Level_12_0;
+            featureLvls[ 3 ] = FeatureLevel.Level_12_1;
+            featureLvls[ 4 ] = FeatureLevel.Level_12_2;
+
 
             // Updated adapter selection code
             using IDXGIFactory4 factory = DXGI.CreateDXGIFactory1<IDXGIFactory4>();
 
             // Get the right adapter to create the device we need
-            for ( uint i = 0; factory.EnumAdapters1( i, out IDXGIAdapter1 tempAdapter ).Success; i++ )
+            for ( uint i = 0; factory.EnumAdapters1( i, out IDXGIAdapter1 tempAdapter1 ).Success; i++ )
             {
-                AdapterDescription1 desc = tempAdapter.Description1;
+                AdapterDescription1 desc = tempAdapter1.Description1;
                 gpuVender = desc.VendorId switch
                 {
                     0x10DE => "NVIDIA",
@@ -117,42 +128,53 @@ namespace SCB
 
                 if ( gpuVender == "Unknown" )
                 {
-                    tempAdapter.Dispose();
+                    tempAdapter1.Dispose();
                     continue;
                 }
 
                 // Skip the adapter if it is a software adapter
                 if ( ( desc.Flags & AdapterFlags.Software ) != 0 )
                 {
-                    tempAdapter.Dispose();
+                    tempAdapter1.Dispose();
                     continue;
                 }
 
-                if ( D3D11.D3D11CreateDevice( tempAdapter, DriverType.Hardware, DeviceCreationFlags.BgraSupport, featureLevel, out ID3D11Device tempDevice ).Success )
-                {
-                    // Check for shader support
-                    var hwOpts = tempDevice!.CheckFeatureSupport<FeatureDataD3D10XHardwareOptions>( Vortice.Direct3D11.Feature.D3D10XHardwareOptions );
-                    if ( hwOpts.ComputeShadersPlusRawAndStructuredBuffersViaShader4X )
-                    {
-                        desktopAdapter = tempAdapter;
-                        d3d11Device = tempDevice;
 
-                        // Null original pointers for safety
-                        tempAdapter = null;
-                        tempDevice = null;
-                        break;
-                    }
+#if DEBUG
+                DeviceCreationFlags deviceCreationFlags = DeviceCreationFlags.BgraSupport | DeviceCreationFlags.Debug;
+#else
+                DeviceCreationFlags deviceCreationFlags = DeviceCreationFlags.BgraSupport;
+#endif
 
-                } else
+                if ( D3D11.D3D11CreateDevice( tempAdapter1, DriverType.Unknown, deviceCreationFlags, featureLvls, out ID3D11Device? tempDevice, out FeatureLevel selectedLvl, out ID3D11DeviceContext? tempContext ).Success )
                 {
-                    tempAdapter.Dispose();
+                    // Check if the adapter supports the necessary features. if any fail, the program will exit.
+                    // we are able to do such a harsh check because by checking for the tempAdapter1 to be hardware, and the gpuVender to be known, we can be sure that the adapter is a hardware adapter.
+                    // that means if we are here the adapter is a hardware adapter and we can check for the necessary features. if not supported this application cant run.
+                    CheckFeatureSupport( ref tempDevice, ref desc, ref selectedLvl );
+
+                    // Set the device and context
+                    tempDevice!.AddRef();
+                    d3d11Device = tempDevice;
+                    tempContext.AddRef();
+                    d3d11Context = tempContext;
+                    tempAdapter1.AddRef();
+                    desktopAdapter = tempAdapter1;
+
+
+                    // Set the device debug name
+                    d3d11Device!.DebugName = "IceDevice";
+
+                    // Null original pointers for safety
+                    tempAdapter1.Release();
+                    tempDevice.Release();
+                    tempContext.Release();
+                    break;
+
                 }
             }
 
 
-#if DEBUG
-            Logger.Log( $"GPU Vendor: {gpuVender}" );
-#endif
 
             // Check if a suitable adapter was found
             if ( desktopAdapter == null || d3d11Device == null )
@@ -160,9 +182,10 @@ namespace SCB
                 ErrorHandler.HandleException( new Exception( "No suitable Direct3D 12 adapter found." ) );
             }
 
-            // Get device context
-            d3d11Context = d3d11Device!.ImmediateContext;
-
+#if DEBUG
+            // Setup the debug layer
+            SetupDebugLayer();
+#endif
 
             // Get the DXGI output
             if ( desktopAdapter.EnumOutputs( 0, out output ).Failure )
@@ -177,69 +200,118 @@ namespace SCB
                 ErrorHandler.HandleException( new Exception( "Failed to get DXGI output1." ) );
             }
 
-            // Dispose output, we no longer need it
-            output.Dispose();
-
             // Get the DXGI output duplication
             outputDuplication = output1!.DuplicateOutput( d3d11Device );
 
-            // Create input buffer
-            BufferDescription inputBufferDesc = default;
-            inputBufferDesc.Usage = ResourceUsage.Default;
-            inputBufferDesc.BindFlags = BindFlags.ShaderResource;
-            inputBufferDesc.CPUAccessFlags = CpuAccessFlags.Read | CpuAccessFlags.Write;
-            inputBufferDesc.MiscFlags = ResourceOptionFlags.BufferAllowRawViews;
-            inputBufferDesc.StructureByteStride = sizeof( UInt32 );
-            inputBufferDesc.ByteWidth = monitorWidth * monitorHeight * sizeof( UInt32 );
-
-            inputBuffer = ErrorHandler.HandleObjCreation( d3d11Device.CreateBuffer( inputBufferDesc ), nameof( inputBuffer ) );
-
-            // Create output buffer
-            BufferDescription outputBufferDesc = default;
-            outputBufferDesc.Usage = ResourceUsage.Default;
-            outputBufferDesc.BindFlags = BindFlags.UnorderedAccess | BindFlags.ShaderResource;
-            outputBufferDesc.CPUAccessFlags = CpuAccessFlags.Read | CpuAccessFlags.Write;
-            outputBufferDesc.MiscFlags = ResourceOptionFlags.BufferAllowRawViews;
-            outputBufferDesc.StructureByteStride = sizeof( UInt32 );
-            outputBufferDesc.ByteWidth = monitorWidth * monitorHeight * sizeof( UInt32 );
-
-            outputBuffer = ErrorHandler.HandleObjCreation( d3d11Device.CreateBuffer( outputBufferDesc ), nameof( outputBuffer ) );
+            // Create the 2d textures for the input, output, and staging buffers
+            inputBuffer = ErrorHandler.HandleObjCreation( d3d11Device.CreateTexture2D( CreateTextureDescription( BufferType.Input ) ), nameof( inputBuffer ) );
+            outputBuffer = ErrorHandler.HandleObjCreation( d3d11Device.CreateTexture2D( CreateTextureDescription( BufferType.Output ) ), nameof( outputBuffer ) );
+            stagingBuffer = ErrorHandler.HandleObjCreation( d3d11Device.CreateTexture2D( CreateTextureDescription( BufferType.Staging ) ), nameof( stagingBuffer ) );
 
 
             // Create shader resource view
             ShaderResourceViewDescription srvDesc = default;
-            srvDesc.Format = Format.R8G8B8A8_UNorm;
-            srvDesc.ViewDimension = ShaderResourceViewDimension.Buffer;
-            srvDesc.Buffer.FirstElement = 0;
-            srvDesc.Buffer.NumElements = monitorWidth * monitorHeight * sizeof( UInt32 );
-            srvDesc.Buffer.ElementWidth = sizeof( UInt32 );
-            srvDesc.Texture2D.MostDetailedMip = 0;
-            srvDesc.Texture2D.MipLevels = 1;
-            srvDesc.BufferEx.Flags = BufferExtendedShaderResourceViewFlags.None;
+            srvDesc.Format = Format.B8G8R8A8_UNorm;
+            srvDesc.ViewDimension = ShaderResourceViewDimension.Texture2D;
+            srvDesc.Texture2D = new Texture2DShaderResourceView
+            {
+                MipLevels = 1,
+                MostDetailedMip = 0
+            };
 
             srv = ErrorHandler.HandleObjCreation( d3d11Device.CreateShaderResourceView( inputBuffer, srvDesc ), nameof( srv ) );
 
             // Create unordered access view
             UnorderedAccessViewDescription uavDesc = default;
-            uavDesc.Format = Format.R8G8B8A8_UNorm;
-            uavDesc.ViewDimension = UnorderedAccessViewDimension.Buffer;
-            uavDesc.Buffer.FirstElement = 0;
-            uavDesc.Buffer.NumElements = monitorWidth * monitorHeight * sizeof( UInt32 );
-            uavDesc.Buffer.Flags = BufferUnorderedAccessViewFlags.None;
+            uavDesc.Format = Format.B8G8R8A8_UNorm;
+            uavDesc.ViewDimension = UnorderedAccessViewDimension.Texture2D;
+            uavDesc.Texture2D = new Texture2DUnorderedAccessView
+            {
+                MipSlice = 0
+            };
 
             uav = ErrorHandler.HandleObjCreation( d3d11Device.CreateUnorderedAccessView( outputBuffer, uavDesc ), nameof( uav ) );
 
 
 #if DEBUG
-            Logger.Log( "D3D12 Initialized" );
+            Logger.Log( "D3D11 Initialized" );
 #endif
         }
 
 
+#if DEBUG
+        private void SetupDebugLayer()
+        {
+
+            // Get the debug layer interfaces
+            d3d11Debug = d3d11Device!.QueryInterface<ID3D11Debug>();
+            infoQueue = d3d11Device.QueryInterface<ID3D11InfoQueue>();
+
+            // Set the debug layer options
+            d3d11Debug!.ReportLiveDeviceObjects( ReportLiveDeviceObjectFlags.Detail );
+
+            // Configure the info queue
+            infoQueue!.SetBreakOnSeverity( MessageSeverity.Corruption, true );
+            infoQueue.SetBreakOnSeverity( MessageSeverity.Error, true );
+            infoQueue.SetBreakOnSeverity( MessageSeverity.Warning, true );
+            infoQueue.SetBreakOnSeverity( MessageSeverity.Info, true );
+            infoQueue.SetBreakOnSeverity( MessageSeverity.Message, true );
+
+            infoQueue.SetBreakOnCategory( MessageCategory.ApplicationDefined, true );
+            infoQueue.SetBreakOnCategory( MessageCategory.Miscellaneous, true );
+            infoQueue.SetBreakOnCategory( MessageCategory.Initialization, true );
+            infoQueue.SetBreakOnCategory( MessageCategory.Cleanup, true );
+            infoQueue.SetBreakOnCategory( MessageCategory.Compilation, true );
+            infoQueue.SetBreakOnCategory( MessageCategory.Execution, true );
+
+            // Need this for right now to see if we can catch the error
+            infoQueue.SetBreakOnID( MessageId.DeviceDispatchBoundResourceMapped, true );
+            infoQueue.SetBreakOnID( MessageId.DeviceDispatchindirectInvalidArgBuffer, true );
+            infoQueue.SetBreakOnID( MessageId.DeviceDispatchindirectOffsetOverflow, true );
+            infoQueue.SetBreakOnID( MessageId.DeviceDispatchindirectOffsetUnaligned, true );
+            infoQueue.SetBreakOnID( MessageId.DeviceDispatchindirectUnsupported, true );
+            infoQueue.SetBreakOnID( MessageId.DeviceDispatchThreadgroupcountOverflow, true );
+            infoQueue.SetBreakOnID( MessageId.DeviceDispatchThreadgroupcountZero, true );
+            infoQueue.SetBreakOnID( MessageId.DeviceDispatchUnsupported, true );
 
 
 
 
+            infoQueue.MuteDebugOutput = false;
+            infoQueue.MessageCountLimit = 1000;
+
+            // let the debug logger run in the background till the class is disposed
+            _ = LogDebug().ConfigureAwait( false );
+        }
+
+
+        private async Task LogDebug()
+        {
+            while ( !disposed )
+            {
+                var msgCount = infoQueue!.NumStoredMessages;
+                if ( msgCount > 0 )
+                {
+                    for ( ulong i = 0; i < msgCount; i++ )
+                    {
+                        var message = infoQueue.GetMessage( i );
+                        string currentTnD = DateTime.Now.ToString( "MM/dd/yyyy HH:mm:ss" );
+
+                        string logMsg = $"\n {currentTnD} \n Severity: {message.Severity} \n ID: {message.Id} \n Category: {message.Category} \n Description: {message.Description}";
+                        await File.WriteAllTextAsync( FileManager.d3d11LogFile, logMsg, Encoding.Unicode );
+                    }
+
+                    if ( infoQueue.NumStoredMessages == msgCount )
+                    {
+                        infoQueue.ClearStoredMessages();
+                    }
+                }
+
+                await Task.Delay( 50 );
+            }
+        }
+
+#endif
 
 
         /// <summary>
@@ -258,57 +330,19 @@ namespace SCB
 
             using ( desktopResource )
             {
-
-                // desktopResource doesnt have a shared handle, so we just query for the d3d11 texture
-                ID3D11Texture2D? d3d11Texture = desktopResource.QueryInterface<ID3D11Texture2D>();
-                if ( d3d11Texture == null )
-                {
-                    ErrorHandler.HandleExceptionNonExit( new Exception( "Failed to get D3D11 texture." ) );
-                    return;
-                }
-
-                // Verify the texture size
-                var desc = d3d11Texture.Description;
-                if ( desc.Width != monitorWidth || desc.Height != monitorHeight )
-                {
-                    ErrorHandler.HandleExceptionNonExit( new Exception( "Texture size does not match monitor size." ) );
-                    return;
-                }
-
-
-#if DEBUG
-                // Map the d3d11 texture to access the texture data
-                if ( d3d11Context!.Map( d3d11Texture, 0, MapMode.Read, 0, out MappedSubresource mappedResource ).Failure )
-                {
-                    ErrorHandler.HandleExceptionNonExit( new Exception( "Failed to map d3d11 texture." ) );
-                    return;
-                }
-
-                // Create a Bitmap from the mapped data
-                PixelFormat bitmapFormat = desc.Format.GetBitsPerPixel() == 32 ? PixelFormat.Format32bppArgb : PixelFormat.Format24bppRgb;
-                bitmap = new( ( int ) desc.Width, ( int ) desc.Height, bitmapFormat );
-                BitmapData bmpData = bitmap.LockBits( new Rectangle( 0, 0, ( int ) desc.Width, ( int ) desc.Height ), ImageLockMode.WriteOnly, bitmap.PixelFormat );
-                Buffer.MemoryCopy( mappedResource.DataPointer.ToPointer(), bmpData.Scan0.ToPointer(), bmpData.Stride * bmpData.Height, bmpData.Stride * bmpData.Height );
-
-                bitmap.UnlockBits( bmpData );
-
-                // Unmap the d3d11 texture
-                d3d11Context!.Unmap( d3d11Texture, 0 );
-
-                //Save the bitmap to file
-                string randomNum = new Random().Next( 0, 1000 ).ToString();
-                bitmap.Save( $"{Utils.FilesAndFolders.enemyScansFolder}d3d11Resource.{randomNum}.bmp" );
-#endif
-
+                // Get texture interface from the desktop resource
+                ID3D11Texture2D? desktopSurface = ErrorHandler.HandleObjCreation( desktopResource.QueryInterfaceOrNull<ID3D11Texture2D>(), nameof( desktopSurface ) );
 
                 try
                 {
                     // Copy the d3d11 texture to the d3d11 captured resource
-                    d3d11Context!.CopyResource( inputBuffer, d3d11Texture );
+                    d3d11Context!.CopyResource( inputBuffer!, desktopSurface );
 
                     // Flush context to submit the copy command
                     d3d11Context!.Flush();
 
+                    // Dispose the desktop surface
+                    desktopSurface!.Dispose();
 
                 } finally
                 {
@@ -319,34 +353,48 @@ namespace SCB
                 // Apply filtering using all shaders managed by the shader manager
                 foreach ( string shaderName in shaderManager!.GetShaderNames() )
                 {
-                    ApplyFilterProcess( shaderName );
+                    // if index is the last name, we pass true to the lastIteration parameter.
+                    bool lastIteration = shaderManager.GetShaderNames().ToList().IndexOf( shaderName ) == shaderManager.GetShaderNames().Length - 1;
+
+                    ApplyFilterProcess( shaderName, lastIteration );
                 }
 
+                // Copy the filtered resource to the staging buffer
+                d3d11Context!.CopyResource( stagingBuffer, outputBuffer );
 
 
                 // Map the filtered resource to access the filtered image data
-                void* dataPointer = null;
-                if ( d3d11Context.Map( outputBuffer, 0, MapMode.Read, 0, out MappedSubresource filterImage ).Failure )
+                if ( d3d11Context.Map( stagingBuffer, 0, MapMode.Read, 0, out MappedSubresource filterImage ).Failure )
                 {
-                    ErrorHandler.HandleExceptionNonExit( new Exception( "Failed to map filtered resource." ) );
+                    ErrorHandler.HandleException( new Exception( "Failed to map filtered resource." ) );
                     return;
                 }
                 try
                 {
                     // Get image details
                     var fiDesc = outputBuffer!.Description;
-                    bitmap = new( ( int ) monitorWidth, ( int ) monitorHeight, fiDesc.StructureByteStride == 4 ? PixelFormat.Format32bppArgb : PixelFormat.Format24bppRgb );
-                    bmpData = bitmap.LockBits( new Rectangle( 0, 0, ( int ) monitorWidth, ( int ) monitorHeight ), ImageLockMode.WriteOnly, bitmap.PixelFormat );
-                    Buffer.MemoryCopy( dataPointer, bmpData.Scan0.ToPointer(), bmpData.Stride * bmpData.Height, bmpData.Stride * bmpData.Height );
+                    bitmap = new( ( int ) fiDesc.Width, ( int ) fiDesc.Height, fiDesc.Format == Format.R8G8B8A8_UNorm ? PixelFormat.Format32bppArgb : PixelFormat.Format24bppRgb );
 
+                    // Lock bitmap for operations
+                    var bmpData = bitmap.LockBits( new Rectangle( 0, 0, ( int ) monitorWidth, ( int ) monitorHeight ), ImageLockMode.WriteOnly, bitmap.PixelFormat );
+
+                    // Get the size of the image data. this includes any padding. so its best to use the stride.
+                    int copySize = bmpData.Stride * bmpData.Height;
+
+                    // Copy the image data to the bitmap
+                    Buffer.MemoryCopy( filterImage.DataPointer.ToPointer(), bmpData.Scan0.ToPointer(), copySize, copySize );
+
+                    GC.KeepAlive( bitmap );
                     bitmap.UnlockBits( bmpData );
                 } finally
                 {
+                    GC.KeepAlive( filterImage );
                     // Unmap the filtered resource
                     d3d11Context.Unmap( outputBuffer, 0 );
-                    dataPointer = null;
                 }
             }
+
+
         }
 
 
@@ -356,29 +404,225 @@ namespace SCB
         /// Applies the filtering process to the captured resource using the specified shader.
         /// </summary>
         /// <param name="shaderName">The name of the shader to use for filtering.</param>
-        private unsafe void ApplyFilterProcess( string shaderName )
+        private unsafe void ApplyFilterProcess( string shaderName, bool lastIteration )
         {
 
-            // Calculate the thread group size and dispatch the shader
-            // nvidia and intel will both dynamicaly use 8, 16, 32 wavefonts, amd will dynamically use 32, or 64 wavefronts.
-            uint threadGroupSize = gpuVender == "AMD" ? 64u : 32u;
-            uint groupCountX = ( monitorWidth + threadGroupSize - 1 ) / threadGroupSize;
+#if DEBUG
+            // Get the shader code for debugging purposes
+            _ = shaderManager!.GetShaderPipeLine( sp => sp!.Shader!.ShaderName == shaderName )!.Shader!.ShaderCode;
+            Logger.Log( $"Shader Name: {shaderName}" );
+#endif
 
-            // Set the shader, uav, srv, and constant buffer
-            d3d11Context!.CSSetConstantBuffer( 0, shaderManager!.GetShaderPipeLine( sp => sp!.Shader!.ShaderName == shaderName )!.ConstantBuffer );
-            d3d11Context.CSSetShader( shaderManager!.GetShaderPipeLine( sp => sp!.Shader!.ShaderName == shaderName )!.Shader!.CompiledShader, null, 0 );
-            d3d11Context.CSSetShaderResources( 0, 1, [ srv! ] );
-            d3d11Context.CSSetUnorderedAccessViews( 0, 1, [ uav! ] );
+            try
+            {
+                // Set the shader, uav, srv, and constant buffer
+                d3d11Context!.CSSetConstantBuffer( 0, shaderManager!.GetShaderPipeLine( sp => sp!.Shader!.ShaderName == shaderName )!.ConstantBuffer );
+                d3d11Context.CSSetShader( shaderManager!.GetShaderPipeLine( sp => sp!.Shader!.ShaderName == shaderName )!.Shader!.CompiledShader!, null, 0 );
+                d3d11Context.CSSetShaderResource( 0, srv! );
+                d3d11Context.CSSetUnorderedAccessView( 0, uav! );
 
-            // Dispatch the shader
-            d3d11Context.Dispatch( groupCountX, monitorHeight, 1 );
 
-            // Unset the shader, uav, srv, and constant buffer for the next shader
-            d3d11Context.CSSetShader( null, null, 0 );
-            d3d11Context.CSSetUnorderedAccessViews( 0, 0, [] );
-            d3d11Context.CSSetShaderResources( 0, 0, [] );
-            d3d11Context.CSSetConstantBuffers( 0, 0, null );
+                // Dispatch the shader
+                if ( gpuVender == "AMD" )
+                {
+                    d3d11Context.Dispatch( 16, 4, 1 );
+                } else
+                {
+                    d3d11Context.Dispatch( 8, 4, 1 );
+                }
+            } catch ( Exception ex )
+            {
+                // Wait for a bit before logging the exception im hoping this lets d3d debug catch up and give us a better error message.
+                Utils.Watch.SecondsSleep( 10 );
 
+                ErrorHandler.HandleException( new Exception( $"Failed to dispatch shader: {shaderName}", ex ) );
+            } finally
+            {
+                // Unset the shader, uav, srv, and constant buffer for the next shader
+                d3d11Context!.CSUnsetUnorderedAccessView( 0 );
+                d3d11Context.CSUnsetShaderResource( 0 );
+                d3d11Context.CSSetShader( null, null, 0 ); //< unbind the shader i didnt see and option to UnsetShader with vortice, so we will just set it to null.
+                d3d11Context.CSUnsetConstantBuffer( 0 );
+
+                if ( !lastIteration )
+                {
+                    // Copy the output buffer to the input buffer for the next shader
+                    d3d11Context.CopyResource( inputBuffer, outputBuffer );
+                }
+            }
+        }
+
+
+        private void CheckFeatureSupport( ref ID3D11Device? device, ref AdapterDescription1 desc, ref FeatureLevel selectedLvl )
+        {
+            var formatSupport2 = device!.CheckFeatureFormatSupport2( Format.R8G8B8A8_UNorm );
+            var formatSupport = device.CheckFeatureFormatSupport( Format.R8G8B8A8_UNorm );
+
+            // Check to make sure the adapter supports the necessary features for this application                  
+            if ( ( formatSupport & FormatSupport.Texture2D ) != 0 )
+            {
+                Logger.Log( "Texture2D is supported" );
+            } else
+            {
+                ErrorHandler.HandleException( new Exception( "Texture2D is not supported" ) );
+            }
+
+            if ( ( formatSupport & FormatSupport.ShaderLoad ) != 0 )
+            {
+                Logger.Log( "Shaders are supported" );
+            } else
+            {
+                ErrorHandler.HandleException( new Exception( "Shaders are not supported" ) );
+            }
+
+            if ( ( formatSupport2 & FormatSupport2.UnorderedAccessViewTypedLoad ) != 0 )
+            {
+                Logger.Log( "UnorderedAccessViewTypedLoad is supported" );
+            } else
+            {
+                ErrorHandler.HandleException( new Exception( "UnorderedAccessViewTypedLoad is not supported" ) );
+            }
+
+            if ( ( formatSupport2 & FormatSupport2.UnorderedAccessViewTypedStore ) != 0 )
+            {
+                Logger.Log( "UnorderedAccessViewTypedStore is supported" );
+            } else
+            {
+                ErrorHandler.HandleException( new Exception( "UnorderedAccessViewTypedStore is not supported" ) );
+            }
+
+            // Check for shader support
+            var hwOpts = device.CheckFeatureSupport<FeatureDataD3D10XHardwareOptions>( Vortice.Direct3D11.Feature.D3D10XHardwareOptions );
+            if ( hwOpts.ComputeShadersPlusRawAndStructuredBuffersViaShader4X )
+            {
+
+#if DEBUG
+                Logger.Log( $"Selected Feature Level: {selectedLvl}" );
+                Logger.Log( $"Selected GPU Vendor: {gpuVender}" );
+                Logger.Log( $"Selected Adapter: {desc.Description}" );
+                Logger.Log( $"Selected Adapter Vendor ID: {desc.VendorId}" );
+                Logger.Log( $"Selected Adapter Device ID: {desc.DeviceId}" );
+                Logger.Log( $"Selected Adapter Subsystem ID: {desc.SubsystemId}" );
+                Logger.Log( $"Selected Adapter Revision: {desc.Revision}" );
+                Logger.Log( $"Selected Adapter Dedicated Video Memory: {desc.DedicatedVideoMemory}" );
+                Logger.Log( $"Selected Adapter Dedicated System Memory: {desc.DedicatedSystemMemory}" );
+                Logger.Log( $"Selected Adapter Shared System Memory: {desc.SharedSystemMemory}" );
+#endif
+            }
+
+
+            // If any of the features are not supported, this function wont return and the program will exit.
+        }
+
+
+        private Texture2DDescription CreateTextureDescription( BufferType bType )
+        {
+            Texture2DDescription text2Decep = default;
+            text2Decep.Usage = bType == BufferType.Input || bType == BufferType.Output ? ResourceUsage.Default : ResourceUsage.Staging;
+            text2Decep.BindFlags = bType == BufferType.Input ? BindFlags.ShaderResource : bType == BufferType.Output ? BindFlags.UnorderedAccess | BindFlags.ShaderResource : BindFlags.None;
+            text2Decep.CPUAccessFlags = bType == BufferType.Input || bType == BufferType.Output ? CpuAccessFlags.None : CpuAccessFlags.Read;
+            text2Decep.MiscFlags = ResourceOptionFlags.None;
+            text2Decep.MipLevels = 1;
+            text2Decep.ArraySize = 1;
+            text2Decep.Width = monitorWidth;
+            text2Decep.Height = monitorHeight;
+            text2Decep.Format = Format.B8G8R8A8_UNorm;
+            text2Decep.SampleDescription = new SampleDescription( 1, 0 );
+
+
+            return text2Decep;
+        }
+
+        private void ReadShaderCodeFromFile()
+        {
+            try
+            {
+                rawShaderCode = File.ReadAllText( FileManager.shaderFile );
+            } catch ( Exception ex )
+            {
+                ErrorHandler.HandleException( new Exception( $"Failed to read shader code from path: {FileManager.shaderFile}", ex ) );
+            }
+
+            if ( rawShaderCode == string.Empty )
+            {
+                ErrorHandler.HandleException( new Exception( $"Shader code is empty." ) );
+            }
+        }
+
+
+        /// <summary>
+        /// Compiles the shader code.
+        /// </summary>
+        private unsafe void CompileAndCreateShaderFromFile()
+        {
+#if DEBUG
+            ShaderFlags flags = ShaderFlags.Debug | ShaderFlags.SkipOptimization | ShaderFlags.EnableStrictness;
+#else
+            ShaderFlags flags = ShaderFlags.OptimizationLevel3 | ShaderFlags.EnableStrictness;
+#endif
+
+            // Allocate memory for the shader code to get a pointer to the string.
+            var ansiPtr = Marshal.StringToHGlobalAnsi( rawShaderCode! );
+
+            // Compile the shader
+            var result = Compiler.Compile(
+                ansiPtr.ToPointer(),
+                ( nuint ) rawShaderCode!.Length,
+                string.Empty, //< use this to look for the shader in the same directory as the executable.
+                null,
+                null,
+                "main",
+                "cs_5_0", //< we use 5_0 for constant buffer support. this allows upto 15 constant buffers per shader.
+                flags,
+                EffectFlags.None,
+                out Blob blob,
+                out Blob errorBlob
+            );
+
+            // Free the memory allocated for the shader code
+            Marshal.FreeHGlobal( ansiPtr );
+
+
+            // Check for compilation errors
+            if ( errorBlob != null || result.Failure )
+            {
+                string? errorMessage = Marshal.PtrToStringAnsi( errorBlob!.BufferPointer );
+                errorBlob.Dispose();
+                ErrorHandler.HandleException( new Exception( $"Failed to compile shader: {errorMessage}" ) );
+            }
+
+            shaderBlob = blob;
+
+            // Create the shader
+            computeShader = ErrorHandler.HandleObjCreation( d3d11Device!.CreateComputeShader( blob! ), nameof( computeShader ) );
+        }
+
+        /// <summary>
+        /// Edits the shader code variables such as GPU vendor, screen width, and screen height.
+        /// </summary>
+        private void EditShaderCodeVariables()
+        {
+
+            if ( gpuVender == "AMD" )
+            {
+                if ( rawShaderCode!.Contains( "//#define AMD" ) )
+                {
+                    rawShaderCode = rawShaderCode.Replace( "//#define AMD", "#define AMD" );
+                }
+            } else
+            {
+                if ( !rawShaderCode!.Contains( "//#define AMD" ) )
+                {
+                    rawShaderCode = rawShaderCode.Replace( "#define AMD", "//#define AMD" );
+                }
+            }
+        }
+
+        private enum BufferType
+        {
+            Input,
+            Output,
+            Staging
         }
 
 
@@ -398,18 +642,24 @@ namespace SCB
                 !disposed )
             {
                 // Dispose managed resources
+                d3d11Context?.Dispose();
+                d3d11Device?.Dispose();
                 inputBuffer?.Dispose();
                 outputBuffer?.Dispose();
-                constantBuffer?.Dispose();
+                stagingBuffer?.Dispose();
                 srv?.Dispose();
                 uav?.Dispose();
-                shaderManager?.Dispose();
+                computeShader?.Dispose();
+                shaderBlob?.Dispose();
+                bufferManager?.Dispose();
                 desktopAdapter?.Dispose();
                 output?.Dispose();
                 output1?.Dispose();
                 outputDuplication?.Dispose();
-                d3d11Context?.Dispose();
-                d3d11Device?.Dispose();
+#if DEBUG
+                d3d11Debug?.Dispose();
+                infoQueue?.Dispose();
+#endif
             }
             disposed = true;
         }
@@ -418,243 +668,152 @@ namespace SCB
 
 
 
-    /// <summary>
-    /// Manages pixel shaders for DirectX 12, including shader compilation, pipeline creation, and resource management.
-    /// </summary>
-    /// <remarks>
-    /// This class is responsible for compiling pixel shaders from given file paths, creating graphics pipeline states
-    /// for those shaders, and setting up the necessary resources to manage shader execution. It is also capable of
-    /// disposing all managed and unmanaged resources used by the shaders and pipeline states.
-    /// </remarks>
-    internal class PixelShaderManager : IDisposable
+
+
+    internal class ConstantBufferManager : IDisposable
     {
-        /// <summary>
-        /// Indicates whether the object has been disposed to prevent multiple disposals.
-        /// </summary>
         private bool disposed;
 
-        /// <summary>
-        /// The DirectX 12 device used for resource creation.
-        /// </summary>
-        private ID3D11Device device;
+        private List<Tuple<string, List<ColorRange>, Color>> Ranges { get; set; }
 
-        /// <summary>
-        /// The list of compiled shaders and associated pipeline states.
-        /// </summary>
-        private readonly List<ShaderPipeline> shaderPipelines;
-
-        private readonly string gpuVendor;
+        public Dictionary<string, ID3D11Buffer?> ConstantBuffers { get; private set; }
 
 
-        /// <summary>
-        /// Initializes a new instance of the PixelShaderManager class with the specified device, root signature, and shader file paths.
-        /// </summary>
-        /// <param name="device">The DirectX 12 device used for resource creation.</param>
-        /// <param name="rootSignature">The root signature used in the pipeline.</param>
-        /// <param name="shaderFilePaths">The list of paths to shader files to be compiled and managed.</param>
-        internal PixelShaderManager( ID3D11Device device, string gpuVendor )
+
+        public ConstantBufferManager( ref ColorToleranceManager colorManager, ref ID3D11Device d3d11Device )
         {
-            this.device = device;
-            this.shaderPipelines = new();
-            this.gpuVendor = gpuVendor;
-            InitShaders();
+            CreateColorRanges( ref colorManager );
+
+            CreateBuffers( ref d3d11Device );
         }
 
-        ~PixelShaderManager()
+        private unsafe void CreateBuffers( ref ID3D11Device d3d11Device )
         {
-            Dispose( false );
-        }
+            ConstantBuffers = [];
 
-
-        /// <summary>
-        /// Reads the shader code from the specified file path.
-        /// There is only one shader. it has been made to be modular and generic so that we can add in the color tolerance values.
-        /// </summary>
-        /// <param name="shaderCode"></param>
-        private static void ReadShaderCode( out string shaderCode )
-        {
-            shaderCode = string.Empty;
-            try
+            foreach ( var colorRange in Ranges )
             {
-                shaderCode = File.ReadAllText( Utils.FilesAndFolders.shaderFile );
-            } catch ( Exception ex )
-            {
-                ErrorHandler.HandleException( new Exception( $"Failed to read shader code from path: {Utils.FilesAndFolders.shaderFile}", ex ) );
-            }
+                ColorRanges temp = new( ( uint ) colorRange.Item2.Count, [ .. colorRange.Item2 ], new Uint4( colorRange.Item3.R, colorRange.Item3.G, colorRange.Item3.B, colorRange.Item3.A ) );
 
-            if ( shaderCode == string.Empty )
-            {
-                ErrorHandler.HandleException( new Exception( $"Shader code is empty." ) );
-            }
-        }
+                int szStruct = Marshal.SizeOf( typeof( ColorRanges ) );
 
-        /// <summary>
-        /// Initializes and compiles the shaders from the specified file paths, creating associated pipeline states.
-        /// </summary>
-        private void InitShaders()
-        {
-            // Read the raw shader code from the file
-            ReadShaderCode( out string shaderCode );
+                // We need to Align the size of the buffer
+                int alignedSize = ( szStruct + 255 ) & ~( 255 );
 
-            // instantiate the color tolerances classes
-            using var outfits = new OutfitColorTolerances();
-            using var features = new CharacterFeatureTolerances();
-
-            // We know there will be 3 shaders currently, character features, outfits, and outlines. so this will be hardcoded for now.
-            for ( int i = 0; i < 3; i++ )
-            {
-                // Get the shader name based on the index
-                string shaderName = i == 0 ? "features" : i == 1 ? "outfits" : "outlines";
-
-                // Get the swap color based on the index
-                Color swapColor = i == 0 ? features.GetSwapColor() : i == 1 ? outfits.GetSwapColor() : ColorTolerances.GetSwapColor();
-
-                // Get the color tolerance details based on the shader name
-                List<Tuple<string, ColorTolerance[]>?> toleranceDetails = shaderName.CompareTo( "features" ) == 0
-                ? features.GetCharacterFeatures()
-                : shaderName.CompareTo( "outfits" ) == 0
-                    ? outfits.GetOutfits()
-                    : new List<Tuple<string, ColorTolerance[]>?>
-                    {
-                        new( "outlines", new[] { ColorTolerances.GetColorTolerance() })
-                    };
-
-                // Create the shader 
-                Shader? shader = ErrorHandler.HandleObjCreation( new Shader( shaderName, shaderCode, toleranceDetails, swapColor, gpuVendor, ref device ), $"{shaderName}" + nameof( shader ) );
-
-                // Create the constant buffer for the shader
-                var constantBuffer = CreateConstantBuffer( ref shader );
-
-                // Create the shader pipeline, and add it to the list
-                shaderPipelines.Add( new ShaderPipeline( shader, constantBuffer ) );
-            }
-        }
-
-
-
-
-        /// <summary>
-        /// Creates a constant buffer for the specified shader.
-        /// </summary>
-        /// <param name="shader"></param>
-        /// <returns>Buffer resource</returns>
-        private unsafe ID3D11Buffer CreateConstantBuffer( ref Shader? shader )
-        {
-            // Setup the color ranges for the constant buffer
-            shader!.SetupColorRanges( out ColorRanges colorRanges );
-            if ( colorRanges.NumOfRanges == 0 )
-            {
-                ErrorHandler.HandleException( new Exception( "No color ranges found." ) );
-            }
-
-            // Get size of the color ranges struct
-            int szColorRanges = Marshal.SizeOf( typeof( ColorRanges ) );
-            // align the size
-            szColorRanges = ( szColorRanges + 255 ) & ~255;
-
-            // Create constant buffer
-            BufferDescription constantBufferDesc = default;
-            constantBufferDesc.Usage = ResourceUsage.Default;
-            constantBufferDesc.BindFlags = BindFlags.ConstantBuffer;
-            constantBufferDesc.CPUAccessFlags = CpuAccessFlags.Write;
-            constantBufferDesc.MiscFlags = ResourceOptionFlags.None;
-            constantBufferDesc.StructureByteStride = 0;
-            constantBufferDesc.ByteWidth = ( uint ) szColorRanges;
-
-            var constBuffer = ErrorHandler.HandleObjCreation( device.CreateBuffer( constantBufferDesc ), $"{shader.ShaderName} const buffer" );
-
-            // Map the constant buffer
-            if ( device!.ImmediateContext.Map( constBuffer, 0, MapMode.WriteDiscard, 0, out MappedSubresource mappedResource ).Failure )
-            {
-                ErrorHandler.HandleException( new Exception( "Failed to map constant buffer." ) );
-            }
-
-            // Copy the color ranges to the constant buffer
-            Buffer.MemoryCopy( &colorRanges, mappedResource.DataPointer.ToPointer(), szColorRanges, szColorRanges );
-
-            // Unmap the constant buffer
-            device!.ImmediateContext.Unmap( constBuffer, 0 );
-
-            return constBuffer!;
-        }
-
-
-        /// <summary>
-        /// Retrieves the shader pipeline associated with the given shader name.
-        /// </summary>
-        /// <param name="shaderName">The name of the shader whose pipeline is to be retrieved.</param>
-        /// <returns>The ShaderPipeline object associated with the specified shader name.</returns>
-        internal ShaderPipeline? GetShaderPipeLine( Predicate<ShaderPipeline?> match )
-        {
-            return shaderPipelines.Find( match )!;
-        }
-
-        /// <summary>
-        /// Returns an array of all the shader names managed by the PixelShaderManager.
-        /// </summary>
-        /// <returns>An array of shader names.</returns>
-        internal string[] GetShaderNames()
-        {
-            return shaderPipelines.Select( sp => sp.Shader!.ShaderName ).ToArray();
-        }
-
-
-        public void Dispose()
-        {
-            Dispose( true );
-            GC.SuppressFinalize( this );
-        }
-
-        /// <summary>
-        /// Releases unmanaged resources and optionally releases managed resources if disposing is true.
-        /// </summary>
-        /// <param name="disposing">True to release both managed and unmanaged resources; false to release only unmanaged resources.</param>
-        protected virtual void Dispose( bool disposing )
-        {
-            if ( disposing && !disposed )
-            {
-                foreach ( var shaderPipeline in shaderPipelines )
+                // Allocate memory for the constant buffer to initialize from
+                IntPtr ptr = Marshal.AllocHGlobal( alignedSize );
+                if ( ptr == IntPtr.Zero )
                 {
-                    shaderPipeline.Dispose();
+                    ErrorHandler.HandleException( new Exception( "Failed to allocate memory for the constant buffer." ) );
+                }
+
+                // Copy the data to the allocated memory
+                Marshal.StructureToPtr( temp, ptr, true );
+
+                // Check for max uint value at the start of the struct
+                if ( Marshal.ReadInt32( ptr ) != int.MaxValue )
+                {
+                    ErrorHandler.HandleException( new Exception( "Failed to copy color range struct to memory." ) );
+                }
+
+                //Create the constant buffer
+                ID3D11Buffer? constantBuffer = ErrorHandler.HandleObjCreation( d3d11Device.CreateBuffer( new BufferDescription
+                {
+                    Usage = ResourceUsage.Dynamic,
+                    ByteWidth = ( uint ) alignedSize,
+                    BindFlags = BindFlags.ConstantBuffer,
+                    CPUAccessFlags = CpuAccessFlags.None,
+                    MiscFlags = ResourceOptionFlags.BufferStructured,
+                    StructureByteStride = 0
+                }, new SubresourceData
+                {
+                    DataPointer = ptr,
+                    SlicePitch = 0,
+                    RowPitch = 0
+                } ), nameof( constantBuffer ) );
+
+                // Add the constant buffer to the list
+                ConstantBuffers.Add( colorRange.Item1, constantBuffer );
+
+                // Free the allocated memory
+                Marshal.FreeHGlobal( ptr );
+            }
+
+
+            if ( ConstantBuffers.Count != Ranges.Count )
+            {
+                ErrorHandler.HandleException( new Exception( "Failed to create all constant buffers." ) );
+            }
+        }
+
+
+
+        private void CreateColorRanges( ref ColorToleranceManager colorManager )
+        {
+
+            // Get the color ranges from the color manager
+            var characterFeatureColors = colorManager.CharacterFeatures;
+            var charaterOutfitColors = colorManager.OutfitColors;
+            var outlineColors = colorManager.CharacterOutlines;
+            ToleranceBase? nullDummy = null;
+
+            // Initialize colorRanges
+            var colorRanges = new List<Tuple<string, List<ColorRange>, Color>>();
+
+            // Parse the character feature colors, outfit colors, and outlines
+            ParseTolerances( ref characterFeatureColors, ref outlineColors, ref colorRanges );
+            ParseTolerances( ref charaterOutfitColors, ref nullDummy, ref colorRanges );
+
+            Ranges = colorRanges;
+        }
+
+        private void ParseTolerances( ref List<ToleranceBase>? tolerances, ref ToleranceBase? outlines, ref List<Tuple<string, List<ColorRange>, Color>> colorRanges )
+        {
+            if ( tolerances != null )
+            {
+                foreach ( var tolerance in tolerances )
+                {
+                    foreach ( var tBase in tolerance.Tolerances )
+                    {
+                        var name = tBase.Key;
+                        var ranges = new List<ColorRange>();
+                        var swap = tolerance.SwapColor;
+
+                        foreach ( var range in tBase.Value )
+                        {
+                            ranges.Add( new ColorRange(
+                                new Range( ( uint ) range.Red!.Minimum, ( uint ) range.Red.Maximum ),
+                                new Range( ( uint ) range.Green!.Minimum, ( uint ) range.Green.Maximum ),
+                                new Range( ( uint ) range.Blue!.Minimum, ( uint ) range.Blue.Maximum ) ) );
+                        }
+
+                        colorRanges.Add( new Tuple<string, List<ColorRange>, Color>( name, ranges, swap ) );
+                    }
                 }
             }
 
-            disposed = true;
-        }
-    }
+            if ( outlines != null )
+            {
+                foreach ( var tBase in outlines.Tolerances )
+                {
+                    var name = tBase.Key;
+                    var ranges = new List<ColorRange>();
+                    var swap = outlines.SwapColor;
 
+                    foreach ( var range in tBase.Value )
+                    {
+                        ranges.Add( new ColorRange(
+                            new Range( ( uint ) range.Red!.Minimum, ( uint ) range.Red.Maximum ),
+                            new Range( ( uint ) range.Green!.Minimum, ( uint ) range.Green.Maximum ),
+                            new Range( ( uint ) range.Blue!.Minimum, ( uint ) range.Blue.Maximum ) ) );
+                    }
 
-
-    /// <summary>
-    /// Represents a compiled shader and its associated pipeline state.
-    /// </summary>
-    internal class ShaderPipeline : IDisposable
-    {
-        private bool disposed;
-        /// <summary>
-        /// The shader class that holds the shader name and compiled shader Blob.
-        /// Also the color tolerance values for the shader.
-        /// </summary>
-        internal Shader? Shader { get; private set; }
-
-        /// <summary>
-        /// The constant buffer associated with the shader it holds the color tolerance values.
-        /// </summary>
-        internal ID3D11Buffer? ConstantBuffer { get; private set; }
-
-        /// <summary>
-        /// Initializes a new instance of the ShaderPipeline class.
-        /// </summary>
-        /// <param name="shader">The name of the shader.</param>
-        /// <param name="pipelineState">The pipeline state associated with the shader.</param>
-        /// 
-        internal ShaderPipeline( Shader? shader, ID3D11Buffer? constantBuffer )
-        {
-            Shader = shader!;
-            ConstantBuffer = constantBuffer;
+                    colorRanges.Add( new Tuple<string, List<ColorRange>, Color>( name, ranges, swap ) );
+                }
+            }
         }
 
-        ~ShaderPipeline()
+        ~ConstantBufferManager()
         {
             Dispose( false );
         }
@@ -670,245 +829,18 @@ namespace SCB
             if ( disposing &&
                 !disposed )
             {
-                Shader!.Dispose();
-                ConstantBuffer!.Dispose();
+                // Dispose managed resources
+                foreach ( var kvp in ConstantBuffers.Values )
+                {
+                    kvp?.Dispose();
+                }
             }
-
             disposed = true;
         }
     }
 
 
 
-
-    /// <summary>
-    /// This is the shader class that holds the shader name and compiled shader Blob.
-    /// This class compiles and holds the shader code, name, path, and compiled shader Blob.
-    /// With the shader code available, we can make quick changes to the code with the color tolerance values and recompile.
-    /// </summary>
-    internal partial class Shader : IDisposable
-    {
-        private bool disposed;
-
-        /// <summary>
-        /// Gets the name of the shader.
-        /// </summary>
-        internal string ShaderName { get; private set; }
-
-        /// <summary>
-        /// Gets or sets the shader code.
-        /// </summary>
-        internal string? ShaderCode { get; private set; }
-
-        /// <summary>
-        /// Compiled shader Blob.
-        /// </summary>
-        private Blob? compiledShaderBlob;
-
-        ///<summary>
-        /// compiled shader
-        ///</summary>
-        private ID3D11ComputeShader? compiledShader;
-
-        /// <summary>
-        /// Gets the list of tuples representing tolerance details.
-        /// Each tuple contains a string name and an array of <see cref="ColorTolerance"/>.
-        /// </summary>
-        internal List<Tuple<string, ColorTolerance[]>?> ToleranceDetails { get; private set; }
-
-        /// <summary>
-        /// Gets or sets the swap color for the shader.
-        /// </summary>
-        private Color SwapColor { get; set; }
-
-        /// <summary>
-        /// Gets or sets the GPU vendor name (e.g., AMD, NVIDIA).
-        /// </summary>
-        private string GpuVendor { get; set; }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="Shader"/> class.
-        /// </summary>
-        /// <param name="shaderName">The name of the shader.</param>
-        /// <param name="shaderCode">The shader code in string format.</param>
-        /// <param name="colorTolerance">The color tolerance details for the shader.</param>
-        /// <param name="swapColor">The color to be swapped.</param>
-        /// <param name="gpuVendor">The GPU vendor name.</param>
-        internal Shader( string shaderName, string shaderCode, List<Tuple<string, ColorTolerance[]>?> colorTolerance, Color swapColor, string gpuVendor, ref ID3D11Device device )
-        {
-            ShaderName = shaderName;
-            ShaderCode = shaderCode;
-            ToleranceDetails = colorTolerance;
-            SwapColor = swapColor;
-            GpuVendor = gpuVendor;
-
-            EditShaderCodeVariables();
-
-            CompileShaderFromFile();
-
-            CreateComputeShader( ref device! );
-        }
-
-        /// <summary>
-        /// Sets up the color ranges for the constant buffer.
-        /// </summary>
-        /// <param name="colorRanges">The <see cref="ColorRanges"/> structure to be set up.</param>
-        internal void SetupColorRanges( out ColorRanges colorRanges )
-        {
-            List<ColorRange> ranges = []; // this should never get to 45 so we will hardcode 45 as our max in the HLSL shader structs.
-
-            foreach ( var tuple in ToleranceDetails )
-            {
-                foreach ( var colorTolerance in tuple!.Item2 )
-                {
-                    ranges.Add( new ColorRange(
-                        new Range( ( uint ) colorTolerance.Red!.Minimum, ( uint ) colorTolerance.Red.Maximum ),
-                        new Range( ( uint ) colorTolerance.Green!.Minimum, ( uint ) colorTolerance.Green.Maximum ),
-                        new Range( ( uint ) colorTolerance.Blue!.Minimum, ( uint ) colorTolerance.Blue.Maximum ) ) );
-                }
-            }
-
-            colorRanges = new ColorRanges( ( uint ) ranges.Count, [ .. ranges ], new Uint4( ( uint ) SwapColor.R, ( uint ) SwapColor.G, ( uint ) SwapColor.B, ( uint ) SwapColor.A ) );
-        }
-
-        /// <summary>
-        /// Compiles the shader code.
-        /// </summary>
-        private void CompileShaderFromFile()
-        {
-            var result = Compiler.Compile(
-                ShaderCode!,
-                "main",
-                string.Empty, //< use this to look for the shader in the same directory as the executable.
-                "cs_4_0", //< we can use 5_0 but we are not using any 5_0 features.
-                out Blob blob,
-                out Blob errorBlob
-            );
-
-            if ( errorBlob != null || result.Failure )
-            {
-                string? errorMessage = Marshal.PtrToStringAnsi( errorBlob!.BufferPointer );
-                errorBlob.Dispose();
-                ErrorHandler.HandleException( new Exception( $"Failed to compile shader: {errorMessage}" ) );
-            }
-
-            CompiledShaderBlob = blob;
-        }
-
-
-        unsafe void CreateComputeShader( ref ID3D11Device device )
-        {
-            // Create the shader
-            compiledShader = ErrorHandler.HandleObjCreation( device.CreateComputeShader( compiledShaderBlob! ), nameof( compiledShader ) );
-        }
-
-        /// <summary>
-        /// Edits the shader code variables such as GPU vendor, screen width, and screen height.
-        /// </summary>
-        private void EditShaderCodeVariables()
-        {
-            // Edit GPU vendor-specific code
-            if ( GpuVendor == "AMD" )
-            {
-                ShaderCode = ShaderCode!.Replace( "//#define AMD 64", "#define AMD 64" );
-
-                // Make sure NVIDIA is commented out.
-                if ( !ShaderCode!.Contains( "//#define NVIDIA 32" ) )
-                {
-                    ShaderCode = ShaderCode!.Replace( "#define NVIDIA 32", "//#define NVIDIA 32" );
-                }
-            } else
-            {
-                // NVIDIA should be commented out by default, so we are just making sure it is not commented out.
-                // Intel follows the same wavefront protocol as NVIDIA.             
-                ShaderCode = ShaderCode!.Replace( "//#define NVIDIA 32", "#define NVIDIA 32" );
-
-                // Make sure AMD is commented out.
-                if ( !ShaderCode!.Contains( "//#define AMD 64" ) )
-                {
-                    ShaderCode = ShaderCode!.Replace( "#define AMD 64", "//#define AMD 64" );
-                }
-            }
-
-            // Get the screen resolution and set the screen width and height in the shader code.
-            Screen? primary = Screen.PrimaryScreen;
-            int width = primary!.Bounds.Width;
-            int height = primary.Bounds.Height;
-
-
-            // Use regex to replace any existing SCREEN_WIDTH and SCREEN_HEIGHT definitions.
-            ShaderCode = Regex.Replace( ShaderCode!, @"#define SCREEN_WIDTH \d+", $"#define SCREEN_WIDTH {width}" );
-            ShaderCode = Regex.Replace( ShaderCode!, @"#define SCREEN_HEIGHT \d+", $"#define SCREEN_HEIGHT {height}" );
-
-            // Double check that the edits were made.
-            if ( !ShaderCode!.Contains( $"#define SCREEN_WIDTH {width}" ) || !ShaderCode!.Contains( $"#define SCREEN_HEIGHT {height}" ) )
-            {
-                ErrorHandler.HandleException( new Exception( "Failed to edit the shader code." ) );
-            }
-
-            if ( ShaderCode!.Contains( $"//#define {GpuVendor} 64" ) )
-            {
-                ErrorHandler.HandleException( new Exception( "Failed to edit the shader code." ) );
-            }
-        }
-
-        /// <summary>
-        /// Gets a reference to the compiled shader Blob.
-        /// </summary>
-        /// <returns>A reference to the compiled shader Blob.</returns>
-        internal ref Blob? RefCompiledShaderBlob() => ref compiledShaderBlob;
-
-        /// <summary>
-        /// Gets or sets the compiled shader Blob.
-        /// </summary>
-        internal Blob? CompiledShaderBlob
-        {
-            get => compiledShaderBlob;
-            set => compiledShaderBlob = value;
-        }
-
-        /// <summary>
-        /// Gets a reference to the compiled shader.
-        /// </summary>  
-        internal ref ID3D11ComputeShader? RefCompiledShader() => ref compiledShader;
-
-        /// <summary>
-        /// Gets or sets the compiled shader.
-        /// </summary>
-        internal ID3D11ComputeShader? CompiledShader
-        {
-            get => compiledShader;
-            set => compiledShader = value;
-        }
-
-        ~Shader()
-        {
-            Dispose( false );
-        }
-
-        /// <summary>
-        /// Disposes the shader and its resources.
-        /// </summary>
-        public void Dispose()
-        {
-            Dispose( true );
-            GC.SuppressFinalize( this );
-        }
-
-        /// <summary>
-        /// Releases resources used by the <see cref="Shader"/> class.
-        /// </summary>
-        /// <param name="disposing">Indicates whether managed resources should also be disposed.</param>
-        protected virtual void Dispose( bool disposing )
-        {
-            if ( disposing && !disposed )
-            {
-                compiledShaderBlob?.Dispose();
-                compiledShader?.Dispose();
-            }
-            disposed = true;
-        }
-    }
 
     /// <summary>
     /// These structs are used for setting up constant buffers for the shaders.
@@ -939,28 +871,25 @@ namespace SCB
     }
 
     [StructLayout( LayoutKind.Sequential, Pack = 4 )]
-    struct ColorRanges( uint numOfRanges, ColorRange[] ranges, Uint4 swapColor )
+    struct ColorRanges
     {
-        public uint NumOfRanges = numOfRanges;
+        public uint safetyCheck = int.MaxValue;
 
-        [MarshalAs( UnmanagedType.ByValArray, SizeConst = 45 )] // Set SizeConst based on your max range count
-        public ColorRange[] Ranges = ranges;
+        public uint NumOfRanges { private set; get; }
 
-        public Uint4 SwapColor = swapColor;
-    }
+        public Uint4 SwapColor { private set; get; }
 
-    /// <summary>
-    /// Nullable extensions for easy null checking with pushing an action based on the object being not null
-    /// </summary>
-    public static class NullableExtensions
-    {
-        public static void Let<T>( this T? obj, Action<T> action ) where T : class
+        [MarshalAs( UnmanagedType.ByValArray, SizeConst = 12 )] // Set SizeConst based on your max range count
+        public ColorRange[] Ranges;
+
+        public ColorRanges( uint numOfRanges, ColorRange[] ranges, Uint4 swapColor )
         {
-            if ( obj != null )
-            {
-                action( obj );
-            }
+
+            Ranges = new ColorRange[ 12 ];
+            ranges.CopyTo( Ranges, 0 );
+
+            NumOfRanges = numOfRanges;
+            SwapColor = swapColor;
         }
     }
-
 }

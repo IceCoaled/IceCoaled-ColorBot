@@ -3,13 +3,15 @@
 
     /// <summary>The Range class.</summary>
     /// <typeparam name="T">Generic parameter.</typeparam>
-    internal class Range<T> where T : IComparable<T>
+    /// <param name="maximum">The maximum value of the range.</param>
+    /// <param name="minimum">The minimum value of the range.</param>
+    internal sealed class Range<T>( T minimum, T maximum ) where T : IComparable<T>
     {
         /// <summary>Minimum value of the range.</summary>
-        internal T Minimum { get; set; }
+        internal T Minimum { get; private set; } = minimum;
 
         /// <summary>Maximum value of the range.</summary>
-        internal T Maximum { get; set; }
+        internal T Maximum { get; private set; } = maximum;
 
         /// <summary>Presents the Range in readable format.</summary>
         /// <returns>String representation of the Range</returns>
@@ -54,6 +56,8 @@
 
     /// <summary>
     /// Color tolerance class to handle color tolerances for color filtering.
+    /// You could add much greater flexibility by making this generic, and adding a typical contstructor.
+    /// This way you could get the type of T and set the ranges accordingly.
     /// </summary>
     /// <param name="redMin">Minimum red rgb value</param>
     /// <param name="redMax">Maximum red rgb value</param>
@@ -61,18 +65,12 @@
     /// <param name="greenMax">Maximum green rgb value</param>
     /// <param name="blueMin">minimum blue rgb value</param>
     /// <param name="blueMax">Maximum blue rgb value</param>
-    internal class ColorTolerance( int redMin, int redMax, int greenMin, int greenMax, int blueMin, int blueMax ) : IDisposable
+    internal sealed class ColorTolerance( int redMin, int redMax, int greenMin, int greenMax, int blueMin, int blueMax )
     {
-        private bool disposed = false;
-        internal Range<int>? Red { get; private set; } = new Range<int> { Minimum = redMin, Maximum = redMax };
-        internal Range<int>? Green { get; private set; } = new Range<int> { Minimum = greenMin, Maximum = greenMax };
-        internal Range<int>? Blue { get; private set; } = new Range<int> { Minimum = blueMin, Maximum = blueMax };
+        internal Range<int>? Red { get; private set; } = new Range<int>( redMin, redMax );
+        internal Range<int>? Green { get; private set; } = new Range<int>( greenMin, greenMax );
+        internal Range<int>? Blue { get; private set; } = new Range<int>( blueMin, blueMax );
 
-
-        ~ColorTolerance()
-        {
-            Dispose( false );
-        }
 
         /// <summary>
         /// Determines if a specified RGB color is within the defined tolerance ranges.
@@ -84,305 +82,305 @@
         internal bool IsColorInRange( int red, int green, int blue )
         {
             // Check if all components (red, green, and blue) are within their respective ranges.
-            return Red.Contains( red ) && Green.Contains( green ) && Blue.Contains( blue );
+            return Red!.Contains( red ) && Green!.Contains( green ) && Blue!.Contains( blue );
         }
 
         /// <summary>
-        /// Determines if a specified RGB color, represented as an <see cref="IEnumerable{T}"/>, is within the defined tolerance ranges.
+        /// Overload of the IsColorInRange method to check if a specified Color object is within the defined tolerance ranges.
         /// </summary>
-        /// <param name="color">An enumerable representing the RGB components of the color (must contain 3 values).</param>
+        /// <param name="color">Color object</param>
         /// <returns>Returns true if the color is within the range, otherwise false.</returns>
-        /// <exception cref="ArgumentException">Thrown when the color enumerable does not contain exactly 3 components.</exception>
-        internal bool IsColorInRange( IEnumerable<int> color )
+        internal bool IsColorInRange( Color color )
         {
-            // Ensure the enumerable contains exactly 3 components for RGB.
-            if ( color.Count() < 3 )
-            {
-                ErrorHandler.HandleExceptionNonExit( new ArgumentException( "Color must have 3 components." ) );
-            }
-
-            // Check if the color components are within range by delegating to the primary IsColorInRange method.
-            return IsColorInRange( color.ElementAt( 0 ), color.ElementAt( 1 ), color.ElementAt( 2 ) );
+            return IsColorInRange( color.R, color.G, color.B );
         }
 
 
-        public void Dispose()
+        /// <summary>
+        /// Validates if the color tolerance is set correctly.
+        /// I.E the maximum must be greater than the minimum for all the color components.
+        /// </summary>
+        /// <return>Return true if the range is valid else false</return>
+        internal bool ValidateColorTolerance()
         {
-            Dispose( true );
-            GC.SuppressFinalize( this );
-        }
-
-        protected virtual void Dispose( bool disposing )
-        {
-            if ( disposing &&
-                !disposed )
-            {
-                Red = null;
-                Green = null;
-                Blue = null;
-            }
-
-            disposed = true;
+            return Red!.IsValid() && Green!.IsValid() && Blue!.IsValid();
         }
     }
 
 
-
     /// <summary>
-    /// Class to handle color tolerances for enemy outlines specifically(user selected)
+    /// Represents a class for managing color tolerances, selected colors, and swap colors for various features.
+    /// ive made this class abstract so that it can be inherited by other classes, and the methods can be overridden(futureproofed).
     /// </summary>
-    internal static class ColorTolerances
+    internal class ToleranceBase
     {
-
-        private static ColorTolerance? orange;
-        private static ColorTolerance? red;
-        private static ColorTolerance? green;
-        private static ColorTolerance? cyan;
-        private static ColorTolerance? yellow;
-        private static ColorTolerance? purple;
-
-        private static Dictionary<string, ColorTolerance>? colorDictionary;
-
-        private static ColorTolerance? selected;
-        readonly private static object selectedLock = new();
-
+        /// <summary>
+        /// Gets the dictionary containing color tolerances for different color names.
+        /// </summary>
+        internal Dictionary<string, List<ColorTolerance>> Tolerances { get; private set; }
 
         /// <summary>
-        /// Sets up the color tolerances for the different color groups.
+        /// Gets or sets the swap color used for highlighting or other visual effects.
         /// </summary>
-        internal static void SetupColorTolerances()
+        internal Color SwapColor { get; set; }
+
+        /// <summary>
+        /// Gets or sets the currently selected color name.
+        /// </summary>
+        internal string Selected { get; set; }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ToleranceBase"/> class with color tolerances and associated names.
+        /// </summary>
+        /// <param name="tolerances">A list of color tolerances for each color.</param>
+        /// <param name="toleranceNames">A list of color names corresponding to each color tolerance.</param>
+        /// <param name="swapColor">The swap color to be used for highlighting or swapping purposes.</param>
+        /// <param name="selectedColor">The initial selected color name.</param>
+        internal ToleranceBase( List<ColorTolerance> tolerances, List<string> toleranceNames, Color swapColor, string selectedColor )
         {
-            orange = new ColorTolerance( 244, 255, 140, 244, 75, 108 );
-            red = new ColorTolerance( 247, 255, 100, 130, 80, 135 );
-            green = new ColorTolerance( 30, 110, 240, 255, 30, 97 );
-            cyan = new ColorTolerance( 60, 110, 230, 255, 230, 255 );
-            yellow = new ColorTolerance( 237, 255, 237, 255, 78, 133 );
-            purple = new ColorTolerance( 194, 255, 60, 99, 144, 255 );
-
-            // Create dictionary with color names as keys and their respective ColorTolerance objects as values
-            colorDictionary = new Dictionary<string, ColorTolerance>
+            Tolerances = [];
+            for ( int i = 0; i < tolerances.Count; i++ )
             {
-                { "orange", orange },
-                { "red", red },
-                { "green", green },
-                { "cyan", cyan },
-                { "yellow", yellow },
-                { "purple", purple },
-            };
-
-#if DEBUG
-            Logger.Log( "Color tolerances set successfully" );
-#endif
+                Tolerances.TryAdd( toleranceNames[ i ], [ tolerances[ i ] ] );
+            }
+            SwapColor = swapColor;
+            Selected = selectedColor;
         }
 
         /// <summary>
-        /// Gets the color tolerance based on the color name.
+        /// Initializes a new instance of the <see cref="ToleranceBase"/> class with a dictionary of color tolerances.
         /// </summary>
-        /// <param name="color">The name of the color.</param>
-        /// <returns>The color tolerance ranges.</returns>
-        /// <exception cref="Exception">Thrown when the color is not found.</exception>
-        internal static ColorTolerance GetColorTolerance( string color )
+        /// <param name="toleranceInputs">A dictionary of color names and their corresponding color tolerances.</param>
+        /// <param name="swapColor">The swap color to be used for highlighting or swapping purposes.</param>
+        /// <param name="selectedColor">The initial selected color name.</param>
+        internal ToleranceBase( Dictionary<string, List<ColorTolerance>> toleranceInputs, Color swapColor, string selectedColor )
         {
-            if ( colorDictionary != null && colorDictionary.TryGetValue( color, out ColorTolerance? value ) )
+            Tolerances = new Dictionary<string, List<ColorTolerance>>( toleranceInputs );
+            SwapColor = swapColor;
+            Selected = selectedColor;
+        }
+
+        /// <summary>
+        /// Gets the color tolerance associated with the specified color name.
+        /// </summary>
+        /// <param name="color">The name of the color to retrieve the tolerance for.</param>
+        /// <returns>The <see cref="ColorTolerance"/> associated with the specified color name, or throws an exception if not found.</returns>
+        internal virtual ColorTolerance GetColorTolerance( string color )
+        {
+            if ( Tolerances.TryGetValue( color, out List<ColorTolerance>? value ) )
             {
-                return value;
+                return value[ 0 ];
             }
             ErrorHandler.HandleException( new Exception( $"Color {color} not found" ) );
-
-            // This line is unreachable, but the compiler doesn't know that
-            return null;
+            return default;
         }
 
         /// <summary>
-        /// Gets the currently selected color tolerance.
+        /// Gets the color tolerance for the currently selected color.
         /// </summary>
-        /// <returns>The selected color tolerance.</returns>
-        /// <exception cref="Exception">Thrown when the selected color is null.</exception>
-        internal static ColorTolerance GetColorTolerance()
+        /// <returns>The <see cref="ColorTolerance"/> for the selected color, or throws an exception if not found.</returns>
+        internal virtual ColorTolerance GetColorTolerance()
         {
-            lock ( selectedLock )
+            if ( Tolerances.TryGetValue( Selected, out List<ColorTolerance>? value ) )
             {
-                if ( selected != null )
-                {
-                    return selected;
-                }
-                ErrorHandler.HandleException( new Exception( "No color tolerance selected" ) );
+                return value[ 0 ];
             }
-
-            // This line is unreachable, but the compiler doesn't know that
-            return null;
+            ErrorHandler.HandleException( new Exception( "No color tolerance selected" ) );
+            return default;
         }
 
         /// <summary>
-        /// Sets the selected color tolerance by color name.
+        /// Sets the currently selected color by its name.
         /// </summary>
         /// <param name="color">The name of the color to select.</param>
-        /// <exception cref="Exception">Thrown when the color is not found.</exception>
-        internal static void SetColorTolerance( string color )
+        internal virtual void SetSelected( string color )
         {
-            lock ( selectedLock )
+            if ( Tolerances.ContainsKey( color ) )
             {
-                if ( colorDictionary != null && colorDictionary.ContainsKey( color ) )
-                {
-                    selected = colorDictionary[ color ];
-                } else
-                {
-                    ErrorHandler.HandleException( new Exception( $"Color {color} not found" ) );
-                }
+                Selected = color;
+            } else
+            {
+                ErrorHandler.HandleException( new Exception( $"Color {color} not found" ) );
             }
         }
 
         /// <summary>
-        /// Gets the color name for the given color tolerance.
+        /// Gets the name of a color given its color tolerance.
         /// </summary>
-        /// <param name="colorTolerance">The color tolerance to get the name for.</param>
-        /// <returns>The name of the color, or "Color not found".</returns>
-        internal static string GetColorName( ColorTolerance colorTolerance )
+        /// <param name="colorTolerance">The color tolerance to find the associated color name for.</param>
+        /// <returns>The name of the color, or throws an exception if not found.</returns>
+        internal virtual string GetColorName( ColorTolerance colorTolerance )
         {
-            lock ( selectedLock )
+            if ( Tolerances.Any( x => x.Value[ 0 ] == colorTolerance ) )
             {
-                if ( colorDictionary != null )
-                {
-                    foreach ( var item in colorDictionary )
-                    {
-                        if ( item.Value == colorTolerance )
-                        {
-                            return item.Key;
-                        }
-                    }
-                }
-                ErrorHandler.HandleException( new Exception( "Color not found" ) );
+                return Tolerances.First( x => x.Value[ 0 ] == colorTolerance ).Key;
             }
 
-            // This line is unreachable, but the compiler doesn't know that
-            return null;
+            ErrorHandler.HandleException( new Exception( "Color not found" ) );
+            return default;
         }
 
+        /// <summary>
+        /// Validates the input dictionary to ensure it matches the stored tolerances dictionary in count.
+        /// </summary>
+        /// <param name="ctorDictionary">The dictionary to validate against the internal tolerances dictionary.</param>
+        /// <returns><c>true</c> if the dictionary matches the count; otherwise, <c>false</c>.</returns>
+        internal virtual bool ValidateTolerances( ref Dictionary<string, List<ColorTolerance>> ctorDictionary )
+        {
+            if ( ctorDictionary.Count != Tolerances.Count )
+            {
+                ErrorHandler.HandleException( new Exception( $"Feature has {ctorDictionary.Count} elements, expected {Tolerances.Count}" ) );
+                return false;
+            }
+            return true;
+        }
 
         /// <summary>
-        /// Returns the swap color for if an outline is found
+        /// Validates the input list to ensure its count matches the expected count in the stored tolerances dictionary.
         /// </summary>
-        /// <returns></returns>
-        internal static Color GetSwapColor() => Color.Purple;
+        /// <param name="ctorList">The list to validate against the count of items in the internal tolerances dictionary.</param>
+        /// <returns><c>true</c> if the list count matches the expected count; otherwise, <c>false</c>.</returns>
+        internal virtual bool ValidateTolerances( List<ColorTolerance> ctorList )
+        {
+            if ( ctorList.Count != Tolerances.Count )
+            {
+                ErrorHandler.HandleException( new Exception( $"Feature has {ctorList.Count} elements, expected {Tolerances.Count}" ) );
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Gets the swap color used for highlighting or other visual effects.
+        /// </summary>
+        /// <returns>The current swap color.</returns>
+        internal virtual Color GetSwapColor() => SwapColor;
+
+        /// <summary>
+        /// Sets the swap color used for highlighting or other visual effects.
+        /// </summary>
+        /// <param name="color">The color to set as the swap color.</param>
+        internal virtual void SetSwapColor( Color color ) => SwapColor = color;
+
+        /// <summary>
+        /// Gets the currently selected color name.
+        /// </summary>
+        /// <returns>The name of the currently selected color.</returns>
+        internal virtual string GetSelected() => Selected;
+
+        /// <summary>
+        /// Get the Count of the Dictionary
+        /// </summary>
+        internal virtual int Count => Tolerances.Count;
     }
 
 
 
 
     /// <summary>
-    /// This class holds the color tolerances for different character features, such as skin tones, hair, eyes, eyebrows, and lips.
-    /// It also provides methods to access these features, perform setup, and check correctness.
+    /// Manages color tolerances for character outlines, features, and outfits.
     /// </summary>
-    internal class CharacterFeatureTolerances : IDisposable
+    internal sealed class ColorToleranceManager
     {
-        private bool Disposed = false;
+        /// <summary>
+        /// Stores the color tolerances for character outlines.
+        /// </summary>
+        internal ToleranceBase CharacterOutlines { get; private set; }
 
         /// <summary>
-        /// Dictionary to validate if all the expected values for each feature are set correctly.
+        /// Stores a list of color tolerances for various character features.
         /// </summary>
-        private readonly Dictionary<string, int> featureTCount;
+        internal List<ToleranceBase> CharacterFeatures { get; private set; }
 
         /// <summary>
-        /// Gets the list of character features with their respective color tolerances.
+        /// Stores a list of color tolerances for different character outfits.
         /// </summary>
-        internal List<Tuple<string, ColorTolerance[]>?>? CharacterFeatures { get; private set; }
+        internal List<ToleranceBase> OutfitColors { get; private set; }
 
-        /// <summary>
-        /// Gets the swap color used to highlight features.
-        /// </summary>
-        internal Color SwapColor { get; private set; } = Color.LawnGreen;
 
-        /// <summary>
-        /// Color tolerances for character skin tones.
-        /// </summary>
-        private ColorTolerance[]? SkinTones { get; set; }
 
+#nullable disable //< Suppressing compiler warnings for nullable types, since we are initializing them in the constructor.
         /// <summary>
-        /// Color tolerances for character hair.
+        /// Initializes a new instance of the <see cref="ColorToleranceManager"/> class.
         /// </summary>
-        private ColorTolerance[]? Hair { get; set; }
-
-        /// <summary>
-        /// Color tolerances for character eyes.
-        /// </summary>
-        private ColorTolerance[]? Eyes { get; set; }
-
-        /// <summary>
-        /// Color tolerances for character eyebrows.
-        /// </summary>
-        private ColorTolerance[]? EyeBrows { get; set; }
-
-        /// <summary>
-        /// Color tolerances for character lips.
-        /// </summary>
-        private ColorTolerance[]? Lips { get; set; }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="CharacterFeatureTolerances"/> class.
-        /// Sets up the color tolerances for each feature and validates them.
-        /// </summary>
-        internal CharacterFeatureTolerances()
+        internal ColorToleranceManager()
         {
-            // Setup the expected counts for each feature
-            featureTCount = new Dictionary<string, int>
+            // Set up color tolerances for character outlines, features, and outfits
+            if ( !InitOutlines() || !InitCharacterFeatures() || !InitCharacterOutfits() )
             {
-                { "SkinTones", 10 },
-                { "Hair", 8 },
-                { "Eyes", 8 },
-                { "EyeBrows", 10 },
-                { "Lips", 10 }
-            };
-
-            // Setup the color tolerances
-            SetupHair();
-            SetupEyes();
-            SetupEyeBrows();
-            SetupLips();
-            SetupSkinTones();
-
-            // Setup the character features
-            SetupCharacterFeatures();
-
-            // Validate if all the values were set correctly
-            if ( CheckFeatureTCount() )
-            {
-#if DEBUG
-                Logger.Log( "CharacterFeatureTolerances set successfully" );
-#endif
+                ErrorHandler.HandleException( new Exception( "ColorToleranceManager failed to initialize" ) );
             }
 
+            // Register the OutlineUpdateHandler to handle outline color updates
+            PlayerData.OnUpdate += OutlineUpdateHandler;
+
+#if DEBUG
+            Logger.Log( "ColorToleranceManager initialized successfully" );
+#endif
+        }
+#nullable enable
+
+
+        ~ColorToleranceManager()
+        {
+            // Unregister the OutlineUpdateHandler
+            PlayerData.OnUpdate -= OutlineUpdateHandler;
         }
 
-        /// <summary>
-        /// Destructor to clean up resources.
-        /// </summary>
-        ~CharacterFeatureTolerances()
-        {
-            Dispose( false );
-        }
 
-
-        /// <summary>
-        /// Sets up the character features and their color tolerances for shaders to get.
-        /// </summary>
-        private void SetupCharacterFeatures()
+        private void OutlineUpdateHandler( object sender, PlayerUpdateCallbackEventArgs e )
         {
-            CharacterFeatures = new()
+            if ( e.Key == UpdateType.OutlineColor )
             {
-                new Tuple<string, ColorTolerance[]>( "SkinTones", SkinTones ),
-                new Tuple<string, ColorTolerance[]>( "Hair", Hair ),
-                new Tuple<string, ColorTolerance[]>( "Eyes", Eyes ),
-                new Tuple<string, ColorTolerance[]>( "EyeBrows", EyeBrows ),
-                new Tuple<string, ColorTolerance[]>( "Lips", Lips )
-            };
+                CharacterOutlines.SetSelected( e.UpdatedVar );
+            }
         }
 
+
+
         /// <summary>
-        /// Sets up the color tolerances for hair.
+        /// Initializes color tolerances for character outlines.
         /// </summary>
-        private void SetupHair()
+        /// <returns>True if initialization is successful; otherwise, false.</returns>
+        private bool InitOutlines()
         {
-            Hair = new ColorTolerance[ 8 ]
+
+            // Define color tolerances for various outline colors
+            CharacterOutlines = new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
+            {
+                { "orange", new List<ColorTolerance> { new( 244, 255, 140, 244, 75, 108 ) } },
+                { "red", new List<ColorTolerance> { new( 247, 255, 100, 130, 80, 135 ) } },
+                { "green", new List<ColorTolerance> { new( 30, 110, 240, 255, 30, 97 ) } },
+                { "cyan", new List<ColorTolerance> { new( 60, 110, 230, 255, 230, 255 ) } },
+                { "yellow", new List<ColorTolerance> { new( 237, 255, 237, 255, 78, 133 ) } },
+                { "purple", new List<ColorTolerance> { new( 194, 255, 60, 99, 144, 255 ) } }
+            }, Color.Purple, "orange" );
+
+
+            // Validate the number of elements in CharacterOutlines
+            if ( CharacterOutlines.Count != 6 )
+            {
+                ErrorHandler.HandleException( new Exception( "CharacterOutlines has incorrect number of elements" ) );
+                return false;
+            }
+
+#if DEBUG
+            Logger.Log( "CharacterOutlines initialized successfully" );
+#endif
+
+            return true;
+        }
+
+
+        /// <summary>
+        /// Initializes color tolerances for character features (e.g., hair, eyes, lips).
+        /// </summary>
+        /// <returns>True if initialization is successful; otherwise, false.</returns>
+        private bool InitCharacterFeatures()
+        {
+
+            // Define color tolerances for different character features
+            var Hair = new ColorTolerance[ 8 ]
             {
                 new(13, 53, 49, 89, 61, 101),
                 new(50, 90, 78, 118, 70, 110),
@@ -393,14 +391,8 @@
                 new(18, 58, 43, 83, 57, 97),
                 new(14, 54, 32, 72, 45, 85)
             };
-        }
 
-        /// <summary>
-        /// Sets up the color tolerances for eyes.
-        /// </summary>
-        private void SetupEyes()
-        {
-            Eyes = new ColorTolerance[ 8 ]
+            var Eyes = new ColorTolerance[ 8 ]
             {
                 new(0, 38, 18, 58, 25, 65),
                 new(29, 69, 20, 60, 15, 55),
@@ -411,14 +403,8 @@
                 new(84, 124, 77, 117, 50, 90),
                 new(71, 111, 61, 101, 36, 76)
             };
-        }
 
-        /// <summary>
-        /// Sets up the color tolerances for eyebrows.
-        /// </summary>
-        private void SetupEyeBrows()
-        {
-            EyeBrows = new ColorTolerance[ 10 ]
+            var EyeBrows = new ColorTolerance[ 10 ]
             {
                 new(16, 56, 37, 77, 45, 85),
                 new(38, 78, 30, 70, 25, 65),
@@ -431,14 +417,8 @@
                 new(135, 175, 129, 169, 135, 175),
                 new(43, 83, 37, 77, 30, 70)
             };
-        }
 
-        /// <summary>
-        /// Sets up the color tolerances for lips.
-        /// </summary>
-        private void SetupLips()
-        {
-            Lips = new ColorTolerance[ 10 ]
+            var Lips = new ColorTolerance[ 10 ]
             {
                 new(22, 62, 42, 82, 52, 92),
                 new(50, 90, 44, 84, 49, 89),
@@ -451,14 +431,8 @@
                 new(104, 144, 68, 108, 56, 96),
                 new(23, 63, 18, 58, 13, 53)
             };
-        }
 
-        /// <summary>
-        /// Sets up the color tolerances for skin tones.
-        /// </summary>
-        private void SetupSkinTones()
-        {
-            SkinTones = new ColorTolerance[ 10 ]
+            var SkinTones = new ColorTolerance[ 10 ]
             {
                 new(17, 57, 40, 80, 70, 110),
                 new(68, 108, 54, 94, 58, 98),
@@ -471,298 +445,108 @@
                 new(92, 132, 79, 119, 67, 107),
                 new(14, 54, 20, 60, 25, 65)
             };
-        }
 
-        /// <summary>
-        /// Checks if all the color tolerances were set correctly.
-        /// </summary>
-        /// <returns>True if setup is correct; otherwise, false.</returns>
-        private bool CheckFeatureTCount()
-        {
-            foreach ( var feature in CharacterFeatures! )
-            {
-                if ( featureTCount.TryGetValue( feature!.Item1, out int expectedCount ) )
+            // Initialize CharacterFeatures with distinct swap colors
+            CharacterFeatures =
+            [
+                new( new Dictionary<string, List<ColorTolerance>>
                 {
-                    if ( feature.Item2.Length != expectedCount )
-                    {
-                        ErrorHandler.HandleException( new Exception( $"Feature {feature.Item1} has {feature.Item2.Length} elements, expected {expectedCount}" ) );
-                        return false;
-                    }
-                } else
+                     { "Hair", new List<ColorTolerance>( Hair ) }
+                }, Color.SaddleBrown, "Hair" ),
+                new( new Dictionary<string, List<ColorTolerance>>
                 {
-                    ErrorHandler.HandleException( new Exception( $"Feature {feature.Item1} not found" ) );
-                    return false;
-                }
-            }
-            return true;
-        }
-
-
-        /// <summary>
-        /// Gets the swap color used for highlighting features.
-        /// </summary>
-        /// <returns>The swap color.</returns>
-        internal Color GetSwapColor() => SwapColor;
-
-        /// <summary>
-        /// Gets the color tolerances for a specific feature.
-        /// </summary>
-        /// <param name="feature">The feature name.</param>
-        /// <returns>An array of <see cref="ColorTolerance"/> for the feature.</returns>
-        internal ColorTolerance[] GetColorTolerances( string feature )
-        {
-            foreach ( var tCheck in CharacterFeatures )
-            {
-                if ( tCheck!.Item1 == feature )
+                     { "Eyes", new List<ColorTolerance>( Eyes ) }
+                }, Color.Teal, "Eyes" ),
+                new( new Dictionary<string, List<ColorTolerance>>
                 {
-                    return tCheck.Item2;
-                }
-            }
-            ErrorHandler.HandleException( new Exception( $"Feature {feature} not found" ) );
-            return Array.Empty<ColorTolerance>();
-        }
-
-        /// <summary>
-        /// Gets a tuple containing the swap color and color tolerances for a specific feature.
-        /// </summary>
-        /// <param name="feature">The feature name.</param>
-        /// <returns>A tuple containing the swap color and an array of color tolerances.</returns>
-        internal Tuple<Color, ColorTolerance[]> GetSwapToleranceTuple( string feature )
-        {
-            foreach ( var tCheck in CharacterFeatures )
-            {
-                if ( tCheck!.Item1 == feature )
+                     { "EyeBrows", new List<ColorTolerance>( EyeBrows ) }
+                }, Color.Tomato, "EyeBrows" ),
+                new( new Dictionary<string, List<ColorTolerance>>
                 {
-                    return new Tuple<Color, ColorTolerance[]>( SwapColor, tCheck.Item2 );
-                }
-            }
-            ErrorHandler.HandleException( new Exception( $"Feature {feature} not found" ) );
-            return null!;
-        }
+                     { "Lips", new List<ColorTolerance>( Lips ) }
+                }, Color.DeepPink, "Lips" ),
+                new( new Dictionary<string, List<ColorTolerance>>
+                {
+                     { "SkinTones", new List<ColorTolerance>( SkinTones ) }
+                }, Color.BurlyWood, "SkinTones" )
+            ];
 
-        /// <summary>
-        /// Gets the list of character features with their color tolerances.
-        /// </summary>
-        /// <returns>A list of character feature tuples.</returns>
-        internal List<Tuple<string, ColorTolerance[]>?> GetCharacterFeatures() => CharacterFeatures;
 
-        /// <summary>
-        /// Disposes of the class and releases resources.
-        /// </summary>
-        public void Dispose()
-        {
-            Dispose( true );
-            GC.SuppressFinalize( this );
-        }
-
-        /// <summary>
-        /// Releases resources used by the class.
-        /// </summary>
-        /// <param name="disposing">Whether to release managed resources.</param>
-        protected virtual void Dispose( bool disposing )
-        {
-            if ( disposing && !Disposed )
+            // Validate the number of elements in CharacterFeatures
+            if ( CharacterFeatures.Count != 5 )
             {
-                SkinTones = null;
-                Hair = null;
-                Eyes = null;
-                EyeBrows = null;
-                Lips = null;
-
-                CharacterFeatures.Clear();
+                ErrorHandler.HandleException( new Exception( "CharacterFeatures has incorrect number of elements" ) );
+                return false;
             }
 
-            Disposed = true;
-        }
-    }
-
-
-    /// <summary>
-    /// This class holds the color tolerances for different character outfits.
-    /// It provides methods to set up these tolerances, access the outfits, and perform validation.
-    /// </summary>
-    internal class OutfitColorTolerances : IDisposable
-    {
-        private bool Disposed = false;
-
-        /// <summary>
-        /// Dictionary for validating that all outfit color tolerances have been set correctly.
-        /// </summary>
-        internal Dictionary<string, int> OutfitTCount { get; private set; }
-
-        /// <summary>
-        /// Gets the list of outfits with their respective color tolerances.
-        /// </summary>
-        internal List<Tuple<string, ColorTolerance[]>?> Outfits { get; private set; }
-
-        /// <summary>
-        /// Gets or sets the swap color used for highlighting outfits.
-        /// </summary>
-        private Color SwapColor { get; set; } = Color.HotPink;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="OutfitColorTolerances"/> class.
-        /// Sets up outfit color tolerances and validates them.
-        /// </summary>
-        internal OutfitColorTolerances()
-        {
-            // Setup the expected counts for each outfit
-            OutfitTCount = new Dictionary<string, int>
-            {
-                { "bloodlust", 3 },
-                { "elegantOperative", 3 },
-                { "prince", 3 },
-                { "honorInBattle", 3 },
-                { "popstar", 3 },
-                { "zeroFour", 3 },
-                { "starbright", 3 },
-                { "risingStarAlpha", 3 },
-                { "risingStarBeta", 3 },
-                { "default1", 3 },
-                { "default2", 4 },
-                { "default3", 3 },
-                { "halloween", 3 }
-            };
-
-            Outfits = new();
-
-            // Setup outfit color tolerances
-            SetupOutfits();
-
-            // Validate if all outfit color tolerances were set correctly
-            if ( CheckOutfitTCount() )
-            {
 #if DEBUG
-                Logger.Log( "OutfitColorTolerances set successfully" );
+            Logger.Log( "CharacterFeatures initialized successfully" );
 #endif
-            }
-        }
 
-        /// <summary>
-        /// Destructor to clean up resources.
-        /// </summary>
-        ~OutfitColorTolerances()
-        {
-            Dispose( false );
-        }
-
-        /// <summary>
-        /// Sets up the outfit color tolerances.
-        /// </summary>
-        private void SetupOutfits()
-        {
-            Outfits.Add( new Tuple<string, ColorTolerance[]>( "bloodlust", [ new ColorTolerance( 0, 34, 0, 38, 0, 40 ), new ColorTolerance( 3, 43, 6, 46, 10, 50 ), new ColorTolerance( 0, 27, 0, 28, 0, 30 ) ] ) );
-            Outfits.Add( new Tuple<string, ColorTolerance[]>( "elegantOperative", [ new ColorTolerance( 0, 23, 0, 24, 0, 22 ), new ColorTolerance( 26, 66, 30, 70, 38, 78 ), new ColorTolerance( 25, 65, 30, 70, 40, 80 ) ] ) );
-            Outfits.Add( new Tuple<string, ColorTolerance[]>( "prince", [ new ColorTolerance( 0, 20, 0, 20, 0, 20 ), new ColorTolerance( 2, 42, 4, 44, 8, 48 ), new ColorTolerance( 35, 75, 37, 77, 48, 88 ) ] ) );
-            Outfits.Add( new Tuple<string, ColorTolerance[]>( "honorInBattle", [ new ColorTolerance( 0, 20, 0, 20, 0, 20 ), new ColorTolerance( 0, 28, 0, 29, 0, 31 ), new ColorTolerance( 0, 20, 0, 20, 0, 20 ) ] ) );
-            Outfits.Add( new Tuple<string, ColorTolerance[]>( "popstar", [ new ColorTolerance( 0, 20, 0, 20, 0, 20 ), new ColorTolerance( 0, 23, 0, 23, 0, 24 ), new ColorTolerance( 0, 20, 0, 20, 0, 20 ) ] ) );
-            Outfits.Add( new Tuple<string, ColorTolerance[]>( "zeroFour", [ new ColorTolerance( 0, 20, 0, 20, 0, 20 ), new ColorTolerance( 0, 21, 0, 21, 0, 21 ), new ColorTolerance( 0, 20, 0, 20, 0, 20 ) ] ) );
-            Outfits.Add( new Tuple<string, ColorTolerance[]>( "starbright", [ new ColorTolerance( 0, 21, 0, 21, 0, 21 ), new ColorTolerance( 3, 43, 5, 45, 9, 49 ), new ColorTolerance( 0, 27, 0, 28, 0, 29 ) ] ) );
-            Outfits.Add( new Tuple<string, ColorTolerance[]>( "risingStarAlpha", [ new ColorTolerance( 0, 20, 0, 20, 0, 20 ), new ColorTolerance( 0, 20, 0, 20, 0, 20 ), new ColorTolerance( 0, 20, 0, 20, 0, 20 ) ] ) );
-            Outfits.Add( new Tuple<string, ColorTolerance[]>( "risingStarBeta", [ new ColorTolerance( 0, 20, 0, 20, 0, 20 ), new ColorTolerance( 0, 22, 0, 22, 0, 22 ), new ColorTolerance( 0, 20, 0, 20, 0, 20 ) ] ) );
-            Outfits.Add( new Tuple<string, ColorTolerance[]>( "default1", [ new ColorTolerance( 9, 49, 6, 46, 3, 43 ), new ColorTolerance( 11, 51, 30, 70, 48, 88 ), new ColorTolerance( 91, 131, 135, 175, 127, 167 ) ] ) );
-            Outfits.Add( new Tuple<string, ColorTolerance[]>( "default2", [ new ColorTolerance( 8, 48, 10, 50, 8, 48 ), new ColorTolerance( 34, 74, 62, 102, 65, 105 ), new ColorTolerance( 104, 144, 114, 154, 109, 149 ), new ColorTolerance( 25, 65, 60, 100, 60, 100 ) ] ) );
-            Outfits.Add( new Tuple<string, ColorTolerance[]>( "default3", [ new ColorTolerance( 0, 35, 0, 35, 0, 33 ), new ColorTolerance( 7, 47, 24, 64, 24, 64 ), new ColorTolerance( 98, 138, 86, 126, 61, 101 ) ] ) );
-            Outfits.Add( new Tuple<string, ColorTolerance[]>( "halloween", [ new ColorTolerance( 0, 34, 0, 38, 0, 40 ), new ColorTolerance( 3, 43, 6, 46, 10, 50 ), new ColorTolerance( 0, 27, 0, 28, 0, 30 ) ] ) );
-        }
-
-
-        /// <summary>
-        /// Gets the swap color used for highlighting outfits.
-        /// </summary>
-        /// <returns>The swap color.</returns>
-        internal Color GetSwapColor() => SwapColor;
-
-        /// <summary>
-        /// Gets the color tolerances for a specific outfit.
-        /// </summary>
-        /// <param name="outfit">The name of the outfit.</param>
-        /// <returns>An array of <see cref="ColorTolerance"/> for the specified outfit.</returns>
-        internal ColorTolerance[] GetColorTolerances( string outfit )
-        {
-            foreach ( var tCheck in Outfits )
-            {
-                if ( tCheck!.Item1 == outfit )
-                {
-                    return tCheck.Item2;
-                }
-            }
-            ErrorHandler.HandleException( new Exception( $"Outfit {outfit} not found" ) );
-            return Array.Empty<ColorTolerance>();
-        }
-
-        /// <summary>
-        /// Gets a tuple containing the swap color and color tolerances for a specific outfit.
-        /// </summary>
-        /// <param name="outfit">The name of the outfit.</param>
-        /// <returns>A tuple containing the swap color and an array of color tolerances.</returns>
-        internal Tuple<Color, ColorTolerance[]> GetSwapToleranceTuple( string outfit )
-        {
-            foreach ( var tCheck in Outfits )
-            {
-                if ( tCheck!.Item1 == outfit )
-                {
-                    return new Tuple<Color, ColorTolerance[]>( SwapColor, tCheck.Item2 );
-                }
-            }
-            ErrorHandler.HandleException( new Exception( $"Outfit {outfit} not found" ) );
-            return null!;
-        }
-
-        /// <summary>
-        /// Gets the list of outfits with their color tolerances.
-        /// </summary>
-        /// <returns>A list of outfit tuples.</returns>
-        internal List<Tuple<string, ColorTolerance[]>?> GetOutfits() => Outfits;
-
-        /// <summary>
-        /// Validates if all the outfit color tolerances have been set correctly.
-        /// </summary>
-        /// <returns>True if all outfit tolerances are set correctly; otherwise, false.</returns>
-        private bool CheckOutfitTCount()
-        {
-            for ( int i = 0; i < Outfits.Count; i++ )
-            {
-                var outfit = Outfits[ i ];
-                int trueCount = outfit!.Item2.Length;
-
-                if ( OutfitTCount.TryGetValue( outfit.Item1, out int expectedCount ) )
-                {
-                    if ( trueCount != expectedCount )
-                    {
-                        ErrorHandler.HandleException( new Exception( $"Outfit {outfit!.Item1} has {trueCount} elements, expected {expectedCount}" ) );
-                        return false;
-                    }
-                } else
-                {
-                    ErrorHandler.HandleException( new Exception( $"Outfit {outfit!.Item1} not found" ) );
-                    return false;
-                }
-            }
             return true;
         }
 
         /// <summary>
-        /// Disposes of the class and releases resources.
+        /// Initializes color tolerances for various character outfits.
         /// </summary>
-        public void Dispose()
+        /// <returns>True if initialization is successful; otherwise, false.</returns>
+        private bool InitCharacterOutfits()
         {
-            Dispose( true );
-            GC.SuppressFinalize( this );
-        }
 
-        /// <summary>
-        /// Releases resources used by the class.
-        /// </summary>
-        /// <param name="disposing">Whether to release managed resources.</param>
-        protected virtual void Dispose( bool disposing )
-        {
-            if ( disposing && !Disposed )
+            // Define color tolerances for different outfits
+            OutfitColors =
+            [
+                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
+                {
+                    { "bloodlust", new List<ColorTolerance> { new( 0, 34, 0, 38, 0, 40 ), new( 3, 43, 6, 46, 10, 50 ), new( 0, 27, 0, 28, 0, 30 ) } }
+                }, Color.Firebrick, "bloodlust" ),
+                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
+                {
+                    { "elegantOperative", new List<ColorTolerance> { new( 0, 23, 0, 24, 0, 22 ), new( 26, 66, 30, 70, 38, 78 ), new( 25, 65, 30, 70, 40, 80 ) } }
+                    }, Color.DarkSlateGray, "elegantOperative" ),
+                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
+                {
+                    { "prince", new List<ColorTolerance> { new( 0, 20, 0, 20, 0, 20 ), new( 2, 42, 4, 44, 8, 48 ), new( 35, 75, 37, 77, 48, 88 ) } }
+                }, Color.BlueViolet, "prince" ),
+                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
+                {
+                    { "starbright", new List<ColorTolerance> { new( 0, 21, 0, 21, 0, 21 ), new( 3, 43, 5, 45, 9, 49 ), new( 0, 27, 0, 28, 0, 29 ) } }
+                }, Color.Gold, "starbright" ),
+                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
+                {
+                    { "generic", new List<ColorTolerance> { new( 0, 20, 0, 20, 0, 20 ), new( 0, 20, 0, 20, 0, 20 ), new( 0, 20, 0, 20, 0, 20 ) } } //< this covers honorIntBattle, popstar, zeroFour, risingStarAlpha, risingStarBeta
+                }, Color.Silver, "generic" ),
+                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
+                {
+                    { "default1", new List<ColorTolerance> { new( 9, 49, 6, 46, 3, 43 ), new( 11, 51, 30, 70, 48, 88 ), new( 91, 131, 135, 175, 127, 167 ) } }
+                }, Color.LightSalmon, "default1" ),
+                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
+                {
+                    { "default2", new List<ColorTolerance> { new( 8, 48, 10, 50, 8, 48 ), new( 34, 74, 62, 102, 65, 105 ), new( 104, 144, 114, 154, 109, 149 ), new( 25, 65, 60, 100, 60, 100 ) } }
+                }, Color.SteelBlue, "default2" ),
+                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
+                {
+                    { "default3", new List<ColorTolerance> { new( 0, 35, 0, 35, 0, 33 ), new( 7, 47, 24, 64, 24, 64 ), new( 98, 138, 86, 126, 61, 101 ) } }
+                }, Color.MediumSlateBlue, "default3" ),
+                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
+                {
+                    { "halloween", new List<ColorTolerance> { new( 0, 34, 0, 38, 0, 40 ), new( 3, 43, 6, 46, 10, 50 ), new( 0, 27, 0, 28, 0, 30 ) } }
+                }, Color.OrangeRed, "halloween" )
+            ];
+
+
+            // Validate the number of elements in OutfitColors
+            if ( OutfitColors.Count != 9 )
             {
-                Outfits.Clear();
+                ErrorHandler.HandleException( new Exception( "OutfitColors has incorrect number of elements" ) );
+                return false;
             }
 
-            Disposed = true;
+#if DEBUG
+            Logger.Log( "OutfitColors initialized successfully" );
+#endif
+
+            return true;
         }
     }
 }

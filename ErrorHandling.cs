@@ -1,22 +1,23 @@
 ﻿using System.Diagnostics.CodeAnalysis;
-using MaterialSkin.Controls;
 
 namespace SCB
 {
     internal static class ErrorHandler
     {
         private static Panel? statusPanel;
-        private static MaterialLabel? statusLabel;
+        private static Label? statusLabel;
+        private static Control? uiControl;
 
         /// <summary>
         /// Initializes the error handler with the status bar controls.
         /// </summary>
         /// <param name="panel">The status bar panel.</param>
         /// <param name="label">The status bar label.</param>
-        internal static void Initialize( Panel panel, MaterialLabel label )
+        internal static void Initialize( Panel panel, Label label, Control UiControl )
         {
             statusPanel = panel;
             statusLabel = label;
+            uiControl = UiControl;
         }
 
         /// <summary>
@@ -38,8 +39,9 @@ namespace SCB
             if ( statusLabel != null && statusPanel != null )
             {
                 statusLabel.Text = $"Error: {ex.Message}";
-                statusLabel.ForeColor = Color.Red; // Set color to indicate an error
+                statusLabel.ForeColor = Color.Red; // Set color to indicate an error               
                 statusPanel.Visible = true;
+                uiControl!.Invalidate();
             }
 
             //allow the user to see the error message
@@ -70,6 +72,7 @@ namespace SCB
                 statusLabel.Text = $"Error: {ex.Message}";
                 statusLabel.ForeColor = Color.Red; // Set color to indicate an error
                 statusPanel.Visible = true;
+                uiControl!.Invalidate();
             }
         }
 
@@ -86,7 +89,7 @@ namespace SCB
             if ( object.Equals( obj, default( T ) ) )
             {
                 ErrorHandler.HandleException( new Exception( $"Failed To Create Object: {typeof( T ).Name}, With Name: {varName}" ) );
-                return default( T );
+                return default;
             }
             return obj;
         }
@@ -101,8 +104,9 @@ namespace SCB
             if ( statusLabel != null && statusPanel != null )
             {
                 statusLabel.Text = "Ready";
-                statusLabel.ForeColor = Color.LightGray; // Reset to default color
+                statusLabel.ForeColor = Color.LightGreen; // Reset to default color
                 statusPanel.Visible = true;
+                uiControl!.Invalidate();
             }
         }
 
@@ -110,31 +114,47 @@ namespace SCB
         /// <summary>
         /// Prints a closing message to the status bar and closes the application.
         /// </summary>
+        [DoesNotReturn]
         private static void PrintClose()
         {
             if ( statusLabel != null && statusPanel != null )
             {
+                statusLabel.ForeColor = Color.Crimson;
+                statusLabel.Text = "Closing...";
+                uiControl!.Invalidate();
                 for ( int i = 0; i < 5; i++ )
                 {
-                    statusPanel.Visible = false;
-                    Thread.Sleep( 500 );
+
                     statusPanel.Visible = true;
+                    uiControl!.Invalidate();
+                    Thread.Sleep( 500 );
+                    statusPanel.Visible = false;
                     Thread.Sleep( 500 );
 
                     statusLabel.Text = $"Closing... in {i}";
+                    uiControl!.Invalidate();
                 }
             }
 
+            // Call the exit method
             Application.Exit();
+
+            // Freeze this thread as calling Application.Exit() will not close the application immediately
+            Thread.Sleep( 10000 );
+
+            // Call Environment.Exit() to force close the application
+            // We can do this because the calling Application.Exit() goes to my override of formClosing properly cleaning everything up
+            Environment.Exit( 0 );
         }
+
 
 
         private static void WriteToLog( string message )
         {
             string dateAndTime = DateTime.Now.ToString( "yyyy-MM-dd HH:mm:ss" );
             string logMessage = $"{dateAndTime} \n - {message}";
-            File.AppendAllText( Utils.FilesAndFolders.exceptionLogFile, "\n" );
-            File.AppendAllText( Utils.FilesAndFolders.exceptionLogFile, logMessage );
+            File.AppendAllText( FileManager.exceptionLogFile, "\n" );
+            File.AppendAllText( FileManager.exceptionLogFile, logMessage );
         }
     }
 }

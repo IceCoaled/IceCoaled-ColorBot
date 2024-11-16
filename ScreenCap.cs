@@ -133,7 +133,7 @@ namespace SCB
 
 #if PRINT
             string randomNum = new Random().Next( 0, 1000 ).ToString();
-            screenShot!.Save( Utils.FilesAndFolders.enemyScansFolder + randomNum + "Unfiltered.png" );
+            screenShot!.Save( FileManager.enemyScansFolder + randomNum + "Unfiltered.png" );
 #endif
 
 
@@ -154,7 +154,7 @@ namespace SCB
             Logger.Log( $"Capture time: {captureTime}ms, Filter time: {postFilterTime - captureTime}ms" );
 #endif
 #if PRINT
-            screenShot.Save( Utils.FilesAndFolders.enemyScansFolder + randomNum + "Filtered.png" );
+            screenShot.Save( FileManager.enemyScansFolder + randomNum + "Filtered.png" );
 #endif
 
             var clusters = GroupConnectedPoints( outlinePoints );

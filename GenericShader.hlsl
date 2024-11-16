@@ -1,11 +1,6 @@
-// Constants for GPU wave front sizes
+// AMD uses 32/64, NVIDIA uses 16/32 wavefront/warp size
+#define AMD
 
-//#define NVIDIA 32
-#define AMD 64 // Uncomment the appropriate line based on GPU
-
-// Screen dimensions
-#define SCREEN_WIDTH 2560
-#define SCREEN_HEIGHT 1440
 
 // Define the Range structure for color limits
 struct Range
@@ -31,8 +26,9 @@ struct ColorRanges
 };
 
 // Buffer definitions
-StructuredBuffer<uint4> rawInput : register(t0);
-RWStructuredBuffer<uint4> rawOutput : register(u0);
+Texture2D<uint4> inputTexture : register(t0);
+RWTexture2D<uint4> outputTexture : register(u0);
+
 
 // Constant buffer for precomputed color ranges
 cbuffer ColorRangeBuffer : register(b0)
@@ -41,24 +37,27 @@ cbuffer ColorRangeBuffer : register(b0)
 };
 
 
-inline bool IsInRange(uint value, Range range)
+inline int IsInRange(uint value, Range range)
 {
-    return value >= range.minimum && value <= range.maximum;
+    if (range.maximum >= 1 &&
+        value >= range.minimum && value <= range.maximum)
+    {
+        return 1;
+    } else
+        return -1;
 }
 
 
-#if AMD
-[numthreads(AMD, 1, 1)]
-#else
-[numthreads(NVIDIA, 1, 1)]
+#ifdef AMD
+[numthreads(16, 4 , 1)]
+#else 
+[numthreads(8, 4, 1)]]
 #endif
 void main(uint3 DTid : SV_DispatchThreadID)
 {
-    // Get the pixel index
-    uint pixelIndex = DTid.y * SCREEN_WIDTH + DTid.x;
     
     // load the pixel 
-    uint4 pixelColor = rawInput[pixelIndex];
+    uint4 pixelColor = inputTexture.Load(int3(DTid.xy, 0));
     
     //check if 
     bool inRange = false;
@@ -66,7 +65,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     for (uint i = 0; i < colorRanges.numOfRanges; i++)
     {
         ColorRange range = colorRanges.ranges[i];
-        if (IsInRange(pixelColor.x, range.redRange) && IsInRange(pixelColor.y, range.greenRange) && IsInRange(pixelColor.z, range.blueRange))
+        if (IsInRange(pixelColor.z, range.redRange) && IsInRange(pixelColor.y, range.greenRange) && IsInRange(pixelColor.x, range.blueRange) > 0)
         {
             inRange = true;
             break;
@@ -74,7 +73,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     }
     
     // write the pixel
-    rawOutput[pixelIndex] = inRange ? pixelColor : colorRanges.swapColor;
+    outputTexture[DTid.xy] = inRange ? pixelColor : colorRanges.swapColor;
 }
 
 

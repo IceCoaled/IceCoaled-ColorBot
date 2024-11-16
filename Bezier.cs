@@ -45,7 +45,7 @@ namespace SCB
             PointF startPoint = new( this.Width / 2, this.Height - 50 );
             PointF endPoint = new( this.Width / 2, 50 );
 
-            List<PointF> controlPoints = new();
+            List<PointF> controlPoints;
 
             if ( PlayerData.BezierControlPointsSet() )
             {

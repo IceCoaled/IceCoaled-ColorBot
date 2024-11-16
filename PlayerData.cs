@@ -1,16 +1,70 @@
 ﻿using System.Diagnostics.CodeAnalysis;
-using Utils;
 
 
 
 namespace SCB
 {
     /// <summary>
+    /// Public delegate for a player data update callback event.
+    /// </summary>
+    /// <typeparam name="T"> this will always just be object, its the easiest way to pass generic variables in events</typeparam>
+    /// <param name="sender">Null</param>
+    /// <param name="e">Event args</param>
+    public delegate void PlayerDataChangedEventHandler( object sender, PlayerUpdateCallbackEventArgs e );
+
+
+    /// <summary>
+    /// Represents event data for a player data update callback, containing the updated variable and its name.
+    /// </summary>
+    /// <typeparam name="T">The type of the updated variable.</typeparam>
+    public sealed class PlayerUpdateCallbackEventArgs : EventArgs
+    {
+        /// <summary>
+        /// Gets the updated variable.
+        /// </summary>
+        public dynamic UpdatedVar { get; }
+
+        /// <summary>
+        /// Gets the update type.
+        /// </summary>
+        public UpdateType Key { get; }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="PlayerUpdateCallbackEventArgs"/> class with the specified updated variable and variable name.
+        /// </summary>
+        /// <param name="updatedVar">The updated variable.</param>
+        /// <param name="key">The update type.</param>
+        public PlayerUpdateCallbackEventArgs( dynamic updatedVar, UpdateType key )
+        {
+            UpdatedVar = updatedVar;
+            Key = key;
+#if DEBUG
+            LogUpdate();
+#endif
+        }
+
+        /// <summary>
+        /// Logs the update details in debug mode.
+        /// </summary>
+        private void LogUpdate()
+        {
+#if DEBUG
+            Logger.Log( this.ToString() );
+#endif
+        }
+    }
+
+
+
+
+
+    /// <summary>
     /// Static class to store and manage player-related data such as aim settings, window properties, and control points.
     /// </summary>
     internal static class PlayerData
     {
-        private static readonly object locker = new();  // Unified lock object for thread safety
+        public static event PlayerDataChangedEventHandler? OnUpdate;
+        private static readonly object locker = new();
 
         private static double localAimSpeed = 0;
         private static int localDeadzone = 0;
@@ -19,25 +73,43 @@ namespace SCB
         private static int localAimKey = 0;
         private static bool localAntiRecoil = false;
         private static bool localPrediction = false;
+        private static float localMouseSens = 0f;
+        private static float localAdsScale = 0f;
         private static nint localHWnd = nint.MaxValue;
         private static PInvoke.RECT localRect = new();
-        private static string localColorToleranceName = "";
-        private static ColorTolerance localColorTolerance = new( 0, 0, 0, 0, 0, 0 );
+        private static string localOutlineColor = "";
         private static AimLocation localAimLocation;
         private static bool localBezierControlPointsSet = false;
         private static Utils.BezierPointCollection localBezierCollection = new( new PointF(), new PointF(), new List<PointF>() );
 
 
         /// <summary>
-        /// Unified method to handle thread-safe access and updates to AimBot settings.
+        /// This method is used to check if the player data is set before starting the aimBot.
         /// </summary>
-        private static void UpdateAimBotIfNeeded( Action updateAction )
+        internal static bool PreStartDataCheck() =>
+            localAimSpeed != 0 &&
+            localDeadzone != 0 &&
+            localAimSmoothing != 0 &&
+            localAimKey != 0 &&
+            localHWnd != nint.MaxValue &&
+            localAimFov != 0 &&
+            localOutlineColor != "";
+
+
+
+        /// <summary>
+        /// Unified method to handle thread-safe PlayerData updates.
+        /// I added this for future-proofing, in case we need to add more complex logic to the update process.
+        /// This way you only need to update the logic in one place.
+        /// </summary>
+        private static void UpdatePlayerData<T>( Func<T> updateFunc, UpdateType key )
         {
             lock ( locker )
             {
-                updateAction.Invoke();
+                OnUpdate?.Invoke( null!, new PlayerUpdateCallbackEventArgs( updateFunc()!, key ) );
             }
         }
+
 
 
         /// <summary>
@@ -45,14 +117,11 @@ namespace SCB
         /// </summary>
         internal static void SetAimSpeed( double aimSpeed )
         {
-            UpdateAimBotIfNeeded( () =>
+            UpdatePlayerData( () =>
             {
-                if ( localAimSpeed != aimSpeed )
-                {
-                    localAimSpeed = aimSpeed;
-                    AimBot.AimSpeed = aimSpeed;
-                }
-            } );
+                localAimSpeed = aimSpeed;
+                return localAimSpeed;
+            }, UpdateType.AimSpeed );
         }
 
         /// <summary>
@@ -60,14 +129,11 @@ namespace SCB
         /// </summary>
         internal static void SetDeadzone( int deadzone )
         {
-            UpdateAimBotIfNeeded( () =>
+            UpdatePlayerData( () =>
             {
-                if ( localDeadzone != deadzone )
-                {
-                    localDeadzone = deadzone;
-                    AimBot.DeadZone = deadzone;
-                }
-            } );
+                localDeadzone = deadzone;
+                return localDeadzone;
+            }, UpdateType.Deadzone );
         }
 
         /// <summary>
@@ -75,14 +141,11 @@ namespace SCB
         /// </summary>
         internal static void SetAimSmoothing( double aimSmoothing )
         {
-            UpdateAimBotIfNeeded( () =>
+            UpdatePlayerData( () =>
             {
-                if ( localAimSmoothing != aimSmoothing )
-                {
-                    localAimSmoothing = aimSmoothing;
-                    AimBot.AimSmoothing = aimSmoothing;
-                }
-            } );
+                localAimSmoothing = aimSmoothing;
+                return localAimSmoothing;
+            }, UpdateType.AimSmoothing );
         }
 
         /// <summary>
@@ -90,102 +153,98 @@ namespace SCB
         /// </summary>
         internal static void SetAimFov( int aimFov )
         {
-            lock ( locker )
+            UpdatePlayerData( () =>
             {
                 localAimFov = aimFov;
-                ScreenCap.AimFov = aimFov;
-            }
+                return localAimFov;
+            }, UpdateType.AimFov );
         }
 
-
-        /// <summary>
-        /// Gets the aim FOV.
-        /// </summary>
-        internal static int GetAimFov()
-        {
-            lock ( locker )
-            {
-                if ( localAimFov > 0 )
-                {
-
-                    return localAimFov;
-                }
-                ErrorHandler.HandleException( new Exception( "No aim FOV selected" ) );
-            }
-
-            // This line should never be reached, but the compiler requires a return value.
-            return localAimFov;
-        }
 
         /// <summary>
         /// Sets the aim key and updates the AimBot if necessary.
         /// </summary>
         internal static void SetAimKey( int aimKey )
         {
-            UpdateAimBotIfNeeded( () =>
+            UpdatePlayerData( () =>
             {
-                if ( localAimKey != aimKey )
-                {
-                    localAimKey = aimKey;
-                    AimBot.AimKey = aimKey;
-                }
-            } );
+                localAimKey = aimKey;
+                return localAimKey;
+            }, UpdateType.AimKey );
         }
 
         /// <summary>
         /// Sets the anti-recoil flag and updates the AimBot if necessary.
         /// </summary>
-        internal static void SetAntiRecoil( bool isEnabled )
+        internal static void SetAntiRecoil( bool antiRecoil )
         {
-            UpdateAimBotIfNeeded( () =>
+            UpdatePlayerData( () =>
             {
-                if ( localAntiRecoil != isEnabled )
-                {
-                    localAntiRecoil = isEnabled;
-                    AimBot.AntiRecoil = isEnabled;
-                }
-            } );
+                localAntiRecoil = antiRecoil;
+                return localAntiRecoil;
+            }, UpdateType.AntiRecoil );
         }
 
 
         /// <summary>
         /// Sets the anti-recoil flag and updates the AimBot if necessary.
         /// </summary>
-        internal static void SetPrediction( bool isEnabled )
+        internal static void SetPrediction( bool prediction )
         {
-            UpdateAimBotIfNeeded( () =>
+            UpdatePlayerData( () =>
             {
-                if ( localPrediction != isEnabled )
-                {
-                    localPrediction = isEnabled;
-                    AimBot.Prediction = isEnabled;
-                }
-            } );
+                localPrediction = prediction;
+                return localPrediction;
+            }, UpdateType.Prediction );
         }
 
         /// <summary>
         ///  Sets the aim location and updates the aimbot if necessary.   
         /// </summary>
-        internal static void SetAimLocation( AimLocation location )
+        internal static void SetAimLocation( AimLocation aimlocation )
         {
-            UpdateAimBotIfNeeded( () =>
+            UpdatePlayerData( () =>
             {
-                if ( localAimLocation != location )
-                {
-                    localAimLocation = location;
-                    AimBot.Location = location;
-                }
-            } );
+                localAimLocation = aimlocation;
+                return localAimLocation;
+            }, UpdateType.AimLocation );
+        }
+
+        /// <summary>
+        /// Set the in game mouse sensitivity.
+        /// </summary>
+        /// <param name="mouseSens"></param>
+        internal static void SetMouseSens( float mouseSens )
+        {
+            UpdatePlayerData( () =>
+            {
+                localMouseSens = mouseSens;
+                return localMouseSens;
+            }, UpdateType.MouseSens );
+        }
+
+
+        /// <summary>
+        /// Sets in game ads scale.
+        /// </summary>
+        /// <param name="adsScale"></param>
+        internal static void SetAdsScale( float adsScale )
+        {
+            UpdatePlayerData( () =>
+            {
+                localAdsScale = adsScale;
+                return localAdsScale;
+            }, UpdateType.AdsScale );
         }
 
         /// <summary>
         /// Unified getter for AimBot-related settings.
         /// </summary>
-        internal static (double aimSpeed, int deadzone, double aimSmoothing, int aimKey, AimLocation location, bool prediction, bool antiRecoil) GetAimSettings()
+        internal static (double aimSpeed, int deadzone, double aimSmoothing, int aimKey, AimLocation location, bool prediction, bool antiRecoil, int deadZone, float mouseSens, float adsScale) GetAimSettings()
         {
             lock ( locker )
             {
-                return (localAimSpeed, localDeadzone, localAimSmoothing, localAimKey, localAimLocation, localPrediction, localAntiRecoil);
+                return (localAimSpeed, localDeadzone, localAimSmoothing, localAimKey, localAimLocation, localPrediction, localAntiRecoil, localDeadzone, localMouseSens, localAdsScale);
             }
         }
 
@@ -194,11 +253,12 @@ namespace SCB
         /// </summary>
         internal static void SetBezierPoints( Utils.BezierPointCollection bezierPoints )
         {
-            lock ( locker )
+            UpdatePlayerData( () =>
             {
                 localBezierCollection = bezierPoints;
                 localBezierControlPointsSet = true;
-            }
+                return localBezierCollection;
+            }, UpdateType.BezierPoints );
         }
 
         /// <summary>
@@ -232,65 +292,28 @@ namespace SCB
         }
 
         /// <summary>
-        /// Sets the color tolerance for aim calculations.
-        /// </summary>
-        internal static void SetColorTolerance( string userSelected )
-        {
-            lock ( locker )
-            {
-                localColorTolerance = ColorTolerances.GetColorTolerance( userSelected );
-                localColorToleranceName = userSelected;
-            }
-        }
-
-        ///<summary>
-        /// Sets color tolerance from another color tolerance.
-        /// this is specifically for config loading.
-        ///</summary>
-        internal static void SetColorTolerance( ColorTolerance colorTolerance, string colorToleranceName )
-        {
-            lock ( locker )
-            {
-                localColorTolerance = colorTolerance;
-                localColorToleranceName = colorToleranceName;
-            }
-        }
-
-        /// <summary>
-        /// Gets the current color tolerance.
-        /// </summary>
-        internal static ColorTolerance GetColorTolerance()
-        {
-
-            lock ( locker )
-            {
-                if ( localColorTolerance != null )
-                {
-                    return localColorTolerance;
-                }
-                ErrorHandler.HandleException( new Exception( "No color tolerance selected" ) );
-            }
-
-            // This line should never be reached, but the compiler requires a return value.
-            return localColorTolerance;
-        }
-
-        /// <summary>
         /// Get color tolerance name.
         /// <summary>
-        internal static string GetColorToleranceName()
+        internal static string GetOutlineColor()
         {
             lock ( locker )
             {
-                if ( localColorToleranceName != "" )
-                {
-                    return localColorToleranceName;
-                }
-                ErrorHandler.HandleException( new Exception( "No color tolerance selected" ) );
+                return localOutlineColor;
             }
+        }
 
-            // This line should never be reached, but the compiler requires a return value.
-            return localColorToleranceName;
+
+        /// <summary>
+        /// Set color tolerance name.
+        /// </summary>
+        /// <param name="colorToleranceName"></param>
+        internal static void SetOutlineColor( string outlineColor )
+        {
+            UpdatePlayerData( () =>
+            {
+                localOutlineColor = outlineColor;
+                return localOutlineColor;
+            }, UpdateType.OutlineColor );
         }
 
 
@@ -303,11 +326,12 @@ namespace SCB
         /// <param name="rect">The new window rectangle.</param>
         internal static void SetRect( PInvoke.RECT rect )
         {
-            lock ( locker )
+            UpdatePlayerData( () =>
             {
                 localRect = rect;
-                ScreenCap.WindowRect = rect;
-            }
+                return localRect;
+            }, UpdateType.WindowRect );
+
         }
 
         /// <summary>
@@ -334,10 +358,11 @@ namespace SCB
         /// <param name="hWnd">The new window handle.</param>
         internal static void SetHwnd( nint hWnd )
         {
-            lock ( locker )
+            UpdatePlayerData( () =>
             {
                 localHWnd = hWnd;
-            }
+                return localHWnd;
+            }, UpdateType.Hwnd );
         }
 
         /// <summary>
@@ -352,6 +377,13 @@ namespace SCB
             }
         }
 
+        internal static int GetFov()
+        {
+            lock ( locker )
+            {
+                return localAimFov;
+            }
+        }
     }
 
 
@@ -359,6 +391,7 @@ namespace SCB
 
     /// <summary>
     /// Struct that holds information about enemy data, including position, visibility, and capture time.
+    /// This must be a struct so that its non nullable.
     /// </summary>
     internal struct EnemyData : IComparable
     {
@@ -424,8 +457,7 @@ namespace SCB
             PointF screenCenter = new( WindowRect.left + ( WindowRect.right - WindowRect.left ) / 2,
                                              WindowRect.top + ( WindowRect.bottom - WindowRect.top ) / 2 );
 
-            // Use a hypothetical utility function (Mathf.GetDistance) to compute the distance.
-
+            // Compute the distance.
             double headDistance = Mathf.GetDistance<double>( ref screenCenter, ref head );
             double bodyDistance = Mathf.GetDistance<double>( ref screenCenter, ref body );
 
@@ -564,13 +596,6 @@ namespace SCB
             return base.GetHashCode();
         }
 
-
-        // This is inherited from the base class, so it is not necessary to override it.
-        //public override string ToString()
-        //{
-        //    return base.ToString();
-        //}
-
         // operator overloads
 
         public static bool operator ==( EnemyData left, EnemyData right )
@@ -606,10 +631,29 @@ namespace SCB
 
 
 
-    enum AimLocation
+    public enum AimLocation
     {
         head,
         body
+    }
+
+
+    public enum UpdateType
+    {
+        AimSpeed = 0xC00C00,
+        Deadzone = 0xA55,
+        AimSmoothing = 0xDADB0D,
+        AimKey = 0xB00B5,
+        AntiRecoil = 0x1E65,
+        Prediction = 0xBADA55,
+        AimFov = 0xBAC5075,
+        BezierPoints = 0x7EA5E,
+        OutlineColor = 0xFA7A55,
+        AimLocation = 0xFA27ED,
+        WindowRect = 0xB16E60,
+        Hwnd = 0xC0FFEE,
+        MouseSens = 0x5E5,
+        AdsScale = 0x5CA1E,
     }
 
 }

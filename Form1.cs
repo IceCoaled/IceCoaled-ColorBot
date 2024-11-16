@@ -5,7 +5,6 @@
 using System.Drawing.Drawing2D;
 using System.Text.Json;
 using MaterialSkin.Controls;
-using Recoil;
 using Utils;
 
 namespace SCB
@@ -14,21 +13,21 @@ namespace SCB
     internal partial class IceColorBot : MaterialSkin.Controls.MaterialForm
     {
         private Panel statusPanel;
-        private MaterialLabel statusLabel;
+        private Label statusLabel;
         private NotifyIcon trayIcon;
-        private Thread isGameActive;
-        private Thread smartKey;
-        private CancellationTokenSource activeGameCancellation;
 #if GETRECOILPATTERN
         internal RecoilPatternCapture? recoilPatternCapture;
 #endif
 
-        Bezier bezierForm;
-        Configurations configurationsForm;
+        private Aimbot aimBot;
+        private Bezier bezierForm;
+        private Configurations configurationsForm;
 
 
-        internal IceColorBot()
+        internal IceColorBot( NotifyIcon notifyIcon, ref Aimbot aimbot )
         {
+            trayIcon = notifyIcon;
+            aimBot = aimbot;
 
             // Initialize MaterialSkinManager
             var materialSkinManager = MaterialSkin.MaterialSkinManager.Instance;
@@ -45,10 +44,6 @@ namespace SCB
             this.BackgroundImage = Properties.Resources.ResourceManager.GetObject( "$this.BackgroundImage" ) as Image;
             this.BackgroundImageLayout = ImageLayout.Center;
 
-            //setup misc stuff
-            activeGameCancellation = new CancellationTokenSource();
-
-
             // Create the tray icon
             trayIcon = new()
             {
@@ -64,19 +59,11 @@ namespace SCB
             // Set the dark mode
             DarkMode.SetDarkMode( this.Handle );
 
-            // Start the threads
-            isGameActive = new Thread( () => Utils.UtilsThreads.SmartGameCheck( ref activeGameCancellation ) );
-            smartKey = new Thread( () => Utils.UtilsThreads.UiSmartKey( trayIcon, this, activeGameCancellation ) );
-            isGameActive.Start();
-            smartKey.Start();
-
             // Initialize the form components
             InitializeComponent();
             InitializeStatusBar();
-            ErrorHandler.Initialize( statusPanel!, statusLabel! );
 
-            // enable UI updates based on loading configs
-            PlayerConfigs.OnSettingsLoaded += UpdateSettingsUI;
+            ErrorHandler.Initialize( statusPanel!, statusLabel!, this );
         }
 
 
@@ -484,12 +471,12 @@ namespace SCB
             };
 
             // Create the status label
-            statusLabel = new MaterialLabel
+            statusLabel = new Label
             {
                 Text = "Ready", // Initial text
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft,
-                ForeColor = Color.LightGray, // Set text color to match the theme
+                ForeColor = Color.LightGreen, // Set text color to match the theme
                 BackColor = Color.Transparent
             };
 
@@ -519,29 +506,16 @@ namespace SCB
         protected override void OnFormClosed( FormClosedEventArgs e )
         {
 
-            if ( isGameActive != null &&
-                isGameActive.IsAlive )
-            {
-                activeGameCancellation.Cancel();
-                isGameActive.Join();
-                smartKey.Join();
-                activeGameCancellation.Dispose();
-                RecoilPatternProcessor.RecoilPatternSource.Cancel();
-                RecoilPatternProcessor.RecoilPatternSource.Dispose();
-            }
-
 #if GETRECOILPATTERN
             recoilPatternCapture?.StopMonitoring();
             recoilPatternCapture?.Dispose();
 #endif
-
 
             trayIcon.Visible = false;
             trayIcon.Dispose();
             bezierForm?.Dispose();
             configurationsForm?.Dispose();
 
-            AimBot.CleanUp();
             Logger.CleanUp();
             base.OnFormClosed( e );
             Application.Exit();
@@ -619,9 +593,7 @@ namespace SCB
                 break;
             }
 
-
-            ColorTolerances.SetColorTolerance( colorName );
-            PlayerData.SetColorTolerance( colorName );
+            PlayerData.SetOutlineColor( colorName );
 
 #if DEBUG
             Logger.Log( "Color Selection Switched To: " + colorName );
@@ -701,28 +673,31 @@ namespace SCB
         private void materialButton1_Click( object? sender, EventArgs e )
         {
 
+#if !DEBUG
+            if ( !PlayerData.PreStartDataCheck() )
+            {
+                MaterialMessageBox.Show( "Not all seetings have been selected", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error );
+                return;
+            }
+#endif
+
 #if DEBUG
 #if GETRECOILPATTERN
             var gameRect = PlayerData.GetRect();
-            string colorCode = "#F27AEB";
+            string colorCode = "#F27AEB"; //<-- This is the color code for the crosshair
             recoilPatternCapture = new( ref gameRect, colorCode );
             recoilPatternCapture.StartMonitoring();
             Logger.Log( "Recoil Pattern Capture Enabled" );
 #else
-            Logger.Log( "Recoil Pattern Capture Disabled" );
             Utils.Watch.StartCaptureWatch();
-            AimBot.Start( PlayerData.GetRect() );
+            aimBot.Start();
 #endif
-#else
-            Utils.Watch.StartCaptureWatch();
-            AimBot.Start( PlayerData.GetRect() );
 #endif
-
         }
 
         private void materialButton2_Click( object? sender, EventArgs e )
         {
-            AimBot.Stop();
+            aimBot.Stop();
             Utils.Watch.StopCaptureWatch();
 #if GETRECOILPATTERN
             recoilPatternCapture!.StopMonitoring();
@@ -795,7 +770,7 @@ namespace SCB
 
         private void materialButton5_Click( object sender, EventArgs e )
         {
-            configurationsForm = new();
+            configurationsForm = new( UpdateSettingsUI! );
             configurationsForm.Show();
         }
 
@@ -804,35 +779,35 @@ namespace SCB
         public void UpdateSettingsUI( Dictionary<string, object?> blobFields )
         {
             // Handle AimSpeed (double)
-            if ( blobFields.ContainsKey( "localAimSpeed" ) && blobFields[ "localAimSpeed" ] is JsonElement aimSpeedJson )
+            if ( blobFields.TryGetValue( "localAimSpeed", out Object? speedValue ) && speedValue is JsonElement aimSpeedJson )
             {
                 double aimSpeed = aimSpeedJson.GetDouble();
                 materialSlider1.Value = ( int ) aimSpeed;
             }
 
             // Handle AimSmoothing (double)
-            if ( blobFields.ContainsKey( "localAimSmoothing" ) && blobFields[ "localAimSmoothing" ] is JsonElement aimSmoothingJson )
+            if ( blobFields.TryGetValue( "localAimSmoothing", out Object? smoothingValue ) && smoothingValue is JsonElement aimSmoothingJson )
             {
                 double aimSmoothing = aimSmoothingJson.GetDouble();
                 materialSlider2.Value = ( int ) aimSmoothing;
             }
 
             // Handle AimFov (int)
-            if ( blobFields.ContainsKey( "localAimFov" ) && blobFields[ "localAimFov" ] is JsonElement aimFovJson )
+            if ( blobFields.TryGetValue( "localAimFov", out Object? fovValue ) && fovValue is JsonElement aimFovJson )
             {
                 int aimFov = aimFovJson.GetInt32();
                 materialSlider3.Value = aimFov;
             }
 
             // Handle Deadzone (int)
-            if ( blobFields.ContainsKey( "localDeadzone" ) && blobFields[ "localDeadzone" ] is JsonElement deadzoneJson )
+            if ( blobFields.TryGetValue( "localDeadzone", out Object? deadzoneValue ) && deadzoneValue is JsonElement deadzoneJson )
             {
                 int deadzone = deadzoneJson.GetInt32();
                 materialSlider4.Value = deadzone;
             }
 
             // Handle AimKey (int or string)
-            if ( blobFields.ContainsKey( "localAimKey" ) && blobFields[ "localAimKey" ] is JsonElement aimKeyJson )
+            if ( blobFields.TryGetValue( "localAimKey", out Object? aimKeyValue ) && aimKeyValue is JsonElement aimKeyJson )
             {
                 int aimKey = aimKeyJson.GetInt32();
                 materialComboBox3.SelectedItem = aimKey.ToString();
@@ -840,7 +815,7 @@ namespace SCB
             }
 
             // Handle AimLocation (int for selected index)
-            if ( blobFields.ContainsKey( "localAimLocation" ) && blobFields[ "localAimLocation" ] is JsonElement aimLocationJson )
+            if ( blobFields.TryGetValue( "localAimLocation", out Object? aimLocValue ) && aimLocValue is JsonElement aimLocationJson )
             {
                 int aimLocationIndex = aimLocationJson.GetInt32();
                 materialComboBox2.SelectedIndex = aimLocationIndex;
@@ -848,7 +823,7 @@ namespace SCB
             }
 
             // Handle ColorTolerance (string)
-            if ( blobFields.ContainsKey( "localColorToleranceName" ) && blobFields[ "localColorToleranceName" ] is JsonElement colorToleranceJson )
+            if ( blobFields.TryGetValue( "localColorToleranceName", out Object? outlineColorValue ) && outlineColorValue is JsonElement colorToleranceJson )
             {
                 string colorTolerance = colorToleranceJson.GetString();
                 materialComboBox1.Text = colorTolerance;
@@ -856,14 +831,14 @@ namespace SCB
             }
 
             // Handle Prediction (bool)
-            if ( blobFields.ContainsKey( "localPrediction" ) && blobFields[ "localPrediction" ] is JsonElement predictionJson )
+            if ( blobFields.TryGetValue( "localPrediction", out Object? predictionValue ) && predictionValue is JsonElement predictionJson )
             {
                 bool prediction = predictionJson.GetBoolean();
                 materialSwitch2.Checked = prediction;
             }
 
             // Handle AntiRecoil (bool)
-            if ( blobFields.ContainsKey( "localAntiRecoil" ) && blobFields[ "localAntiRecoil" ] is JsonElement antiRecoilJson )
+            if ( blobFields.TryGetValue( "localAntiRecoil", out Object? antiRecoilValue ) && antiRecoilValue is JsonElement antiRecoilJson )
             {
                 bool antiRecoil = antiRecoilJson.GetBoolean();
                 materialSwitch1.Checked = antiRecoil;

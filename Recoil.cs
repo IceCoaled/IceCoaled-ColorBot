@@ -6,7 +6,6 @@ using System.Drawing.Imaging;
 using System.Text;
 using SCB;
 using Tesseract;
-using Utils;
 
 
 
@@ -84,7 +83,7 @@ namespace Recoil
             // Capture the region from the screen
             g.CopyFromScreen( captureArea.Left, captureArea.Top, 0, 0, captureArea.Size, CopyPixelOperation.SourceCopy );
 #if DEBUG
-            screenshot.Save( FilesAndFolders.recoilFolder + "GunName.png" );
+            screenshot.Save( FileManager.recoilFolder + "GunName.png" );
 #endif
         }
 
@@ -131,7 +130,7 @@ namespace Recoil
         /// </summary>
         private static string ExtractTextFromImage( ref Bitmap img )
         {
-            using var engine = new TesseractEngine( FilesAndFolders.tessdataFolder, "eng", EngineMode.Default );
+            using var engine = new TesseractEngine( FileManager.tessdataFolder, "eng", EngineMode.Default );
             // Convert Bitmap to Pix format
             using Pix pix = BitmapToPix( ref img );
             using var page = engine.Process( pix );
@@ -313,27 +312,45 @@ namespace Recoil
     }
 
 
-    internal static class RecoilPatternProcessor
+    internal class RecoilPatternProcessor
     {
-        private static Dictionary<string, RecoilPattern> patternDatabase = new();
-        private static readonly object databaseLock = new();
+        public event EventHandler<RecoilPattern> RecoilPatternChanged;
+
+        private Dictionary<string, RecoilPattern> patternDatabase = new();
+        private readonly object databaseLock = new();
 
         //original window size is static at 1440x2560       
-        private static PInvoke.RECT originalWindowRect = new() { left = 0, top = 0, right = 2560, bottom = 1440 };
-        internal static PInvoke.RECT OriginalWindowRect { get => originalWindowRect; }
-        internal static CancellationTokenSource RecoilPatternSource { get; set; } = new();
+        private PInvoke.RECT OriginalWindowRect { get; set; } = new() { left = 0, top = 0, right = 2560, bottom = 1440 };
+        internal CancellationTokenSource RecoilPatternSource { get; set; } = new();
 
-        private static readonly Object RecoilPatternLock = new();
-        private static RecoilPattern? currentPattern = null;
+        private readonly object RecoilPatternLock = new();
+        private RecoilPattern? currentPattern = null;
+
+        internal RecoilPatternProcessor()
+        {
+            // Start the thread to monitor the recoil pattern
+            Task.Run( async () => await RecoilPatternThread() );
+        }
+
+        ~RecoilPatternProcessor()
+        {
+            RecoilPatternSource.Cancel();
+            RecoilPatternSource.Dispose();
+        }
+
+        private void RecoilPatternChangedHandler( RecoilPattern pattern )
+        {
+            RecoilPatternChanged?.Invoke( this, pattern );
+        }
 
 
         /// <summary>
         /// Processes all patterns for each gun folder in the main directory, averages them, and stores them in the database.
         /// </summary>
-        internal static unsafe void ProcessAllGunPatterns()
+        internal unsafe void ProcessAllGunPatterns()
         {
             // Get all subdirectories (which represent each gun folder)
-            string[] gunFolders = Directory.GetDirectories( FilesAndFolders.recoilPatterns );
+            string[] gunFolders = Directory.GetDirectories( FileManager.recoilPatterns );
 
             Parallel.ForEach( gunFolders, gunFolder =>
             {
@@ -344,7 +361,7 @@ namespace Recoil
         /// <summary>
         /// Processes all patterns for a specific gun folder, averages them, and stores them in the database.
         /// </summary>
-        internal static void ProcessGunPatterns( string gunFolder )
+        internal void ProcessGunPatterns( string gunFolder )
         {
             List<RecoilPattern> patterns = new();
 
@@ -379,7 +396,7 @@ namespace Recoil
         /// <summary>
         /// Reads a recoil pattern from a text file based on the given format.
         /// </summary>
-        public static RecoilPattern ReadFromFile( string filePath )
+        public RecoilPattern ReadFromFile( string filePath )
         {
 
             // Create a dictionary to store the pattern
@@ -438,7 +455,7 @@ namespace Recoil
         /// <summary>
         /// Averages multiple recoil patterns into a single pattern.
         /// </summary>
-        internal static RecoilPattern AveragePatterns( List<RecoilPattern> patterns )
+        internal RecoilPattern AveragePatterns( List<RecoilPattern> patterns )
         {
             // Use the pattern with the least positions, to avoid out of range exceptions
             // We know there is only 3 patterns, so we can hardcode it
@@ -477,7 +494,7 @@ namespace Recoil
         /// <summary>
         /// Retrieves the recoil pattern for a specific gun.
         /// </summary>
-        internal static RecoilPattern GetRecoilPattern( string gunName )
+        internal RecoilPattern GetRecoilPattern( string gunName )
         {
             if ( patternDatabase.TryGetValue( gunName, out RecoilPattern? value ) )
             {
@@ -493,11 +510,11 @@ namespace Recoil
         /// <summary>
         /// Refactors all stored patterns based on a new game window size.
         /// </summary>
-        internal static void RefactorAllPatterns( ref PInvoke.RECT currentWindowRect )
+        internal void RefactorAllPatterns( ref PInvoke.RECT currentWindowRect )
         {
 
-            float scaleX = ( float ) ( currentWindowRect.right - currentWindowRect.left ) / ( originalWindowRect.right - originalWindowRect.left );
-            float scaleY = ( float ) ( currentWindowRect.bottom - currentWindowRect.top ) / ( originalWindowRect.bottom - originalWindowRect.top );
+            float scaleX = ( float ) ( currentWindowRect.right - currentWindowRect.left ) / ( OriginalWindowRect.right - OriginalWindowRect.left );
+            float scaleY = ( float ) ( currentWindowRect.bottom - currentWindowRect.top ) / ( OriginalWindowRect.bottom - OriginalWindowRect.top );
 
             foreach ( var gunName in patternDatabase.Keys.ToList() )
             {
@@ -510,7 +527,7 @@ namespace Recoil
         }
 
 
-        internal static RecoilPattern CurrentPattern
+        internal RecoilPattern CurrentPattern
         {
             get
             {
@@ -524,12 +541,13 @@ namespace Recoil
                 lock ( RecoilPatternLock )
                 {
                     currentPattern = value;
+                    RecoilPatternChangedHandler( currentPattern );
                 }
             }
         }
 
 
-        internal static async Task RecoilPatternThread()
+        internal async Task RecoilPatternThread()
         {
             // Process all patterns and store them in the database
             ProcessAllGunPatterns();
@@ -540,9 +558,9 @@ namespace Recoil
                 "CYCLONE", "M25 HORNET", "M49 FURY", "M67 REAVER", "WHISPER"
             };
 
-            int buyKey = Utils.MouseInput.VK_B;
-            int escapeKey = Utils.MouseInput.VK_ESCAPE;
-            int backupKey = Utils.MouseInput.VK_F1;
+            int buyKey = MouseInput.VK_B;
+            int escapeKey = MouseInput.VK_ESCAPE;
+            int backupKey = MouseInput.VK_F1;
 
 
             // Wait for the game window to be detected
@@ -569,7 +587,7 @@ namespace Recoil
             // Automatically monitor the screen for weapon name changes
             while ( !RecoilPatternSource.Token.IsCancellationRequested )
             {
-                if ( Utils.MouseInput.IsKeyPressed( ref buyKey ) )
+                if ( MouseInput.IsKeyPressed( ref buyKey ) )
                 {
                     await HandleBuyState( escapeKey );
                     // Automatically check for weapon name change using OCR
@@ -594,7 +612,7 @@ namespace Recoil
                 }
 
                 // If the scan doesnt pick up the weapon name, press F1 to try again
-                if ( Utils.MouseInput.IsKeyPressed( ref backupKey ) )
+                if ( MouseInput.IsKeyPressed( ref backupKey ) )
                 {
                     string weaponName = screenCaptureOCR.PerformOCRForWeaponName();
                     if ( !CurrentAddedGuns.Contains( weaponName ) )
@@ -641,7 +659,7 @@ namespace Recoil
             while ( true )
             {
                 Utils.Watch.MicroSleep( 100 );
-                if ( Utils.MouseInput.IsKeyPressed( ref escapeKey ) )
+                if ( MouseInput.IsKeyPressed( ref escapeKey ) )
                 {
                     await Task.Delay( 1300 ); // delay to ensure the buy menu is closed, and gun name is visible
                     break;
