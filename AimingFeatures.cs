@@ -2,8 +2,8 @@
 
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using Atomics;
 using Recoil;
+using SCB.Atomics;
 
 namespace SCB
 {
@@ -13,17 +13,17 @@ namespace SCB
         private bool disposed;
 
         // Aimbot settings
-        private readonly UnsafeAtomicNumerics<double> AimSpeed;
-        private readonly UnsafeAtomicNumerics<double> AimSmoothing;
-        private readonly UnsafeAtomicNumerics<bool> AntiRecoil;
-        private readonly UnsafeAtomicNumerics<bool> Prediction;
-        private readonly UnsafeAtomicNumerics<int> AimKey;
-        private readonly UnsafeAtomicNumerics<int> DeadZone;
+        private readonly AtomicDouble AimSpeed;
+        private readonly AtomicDouble AimSmoothing;
+        private readonly AtomicBool AntiRecoil;
+        private readonly AtomicBool Prediction;
+        private readonly AtomicInt32 AimKey;
+        private readonly AtomicInt32 DeadZone;
         private readonly UnsafeAtomicNumerics<AimLocation> AimLoc;
 
         // In game settings
-        private readonly UnsafeAtomicNumerics<float> MouseSensitivity;
-        private readonly UnsafeAtomicNumerics<float> AdsScale;
+        private readonly AtomicFloat MouseSensitivity;
+        private readonly AtomicFloat AdsScale;
 
         // Thread and cancellation token for enemy scanning
         private readonly DirectX11 directX11;
@@ -48,16 +48,17 @@ namespace SCB
         {
             // Set the UserSettings
             var playerSettings = PlayerData.GetAimSettings();
-            AimSpeed = new UnsafeAtomicNumerics<double>( playerSettings.aimSpeed );
-            AimSmoothing = new UnsafeAtomicNumerics<double>( playerSettings.aimSmoothing );
-            AntiRecoil = new UnsafeAtomicNumerics<bool>( playerSettings.antiRecoil );
-            Prediction = new UnsafeAtomicNumerics<bool>( playerSettings.prediction );
-            AimKey = new UnsafeAtomicNumerics<int>( playerSettings.aimKey );
-            DeadZone = new UnsafeAtomicNumerics<int>( playerSettings.deadZone );
+            AimSpeed = new AtomicDouble( playerSettings.aimSpeed );
+            AimSmoothing = new AtomicDouble( playerSettings.aimSmoothing );
+            AntiRecoil = new AtomicBool( playerSettings.antiRecoil );
+            Prediction = new AtomicBool( playerSettings.prediction );
+            AimKey = new AtomicInt32( playerSettings.aimKey );
+            DeadZone = new AtomicInt32( playerSettings.deadZone );
             AimLoc = new UnsafeAtomicNumerics<AimLocation>( playerSettings.location );
             // Set in game settings
-            MouseSensitivity = new UnsafeAtomicNumerics<float>( playerSettings.mouseSens );
-            AdsScale = new UnsafeAtomicNumerics<float>( playerSettings.adsScale );
+            MouseSensitivity = new AtomicFloat( playerSettings.mouseSens );
+            AdsScale = new AtomicFloat( playerSettings.adsScale );
+
 
             // Get the game window rect
             var gameRect = PlayerData.GetRect();
@@ -332,8 +333,8 @@ namespace SCB
                             continue;
                         }
 
-                        if ( ( AimLoc.VALUE() == AimLocation.head ? recentFrames.Item1.DistanceFromCenter.toHead : recentFrames.Item1.DistanceFromCenter.toBody ) >= DeadZone ||
-                        ( AimLoc.VALUE() == AimLocation.head ? recentFrames.Item2.DistanceFromCenter.toHead : recentFrames.Item2.DistanceFromCenter.toBody ) >= DeadZone )
+                        if ( ( int ) ( AimLoc.VALUE() == AimLocation.head ? recentFrames.Item1.DistanceFromCenter.toHead : recentFrames.Item1.DistanceFromCenter.toBody ) >= DeadZone ||
+                          ( int ) ( AimLoc.VALUE() == AimLocation.head ? recentFrames.Item2.DistanceFromCenter.toHead : recentFrames.Item2.DistanceFromCenter.toBody ) >= DeadZone )
                         {
                             // Perform prediction based on historical data
                             var targetPos = PredictEnemy( recentFrames, AimLoc.VALUE(), 5.0f );
@@ -362,7 +363,7 @@ namespace SCB
                                 enemy = enemyBuffer.GetLatestEntry();
 
                                 // Check if the enemy is within the DeadZone
-                                if ( ( AimLoc.VALUE() == AimLocation.head ? enemy.DistanceFromCenter.toHead : enemy.DistanceFromCenter.toBody ) <= DeadZone )
+                                if ( ( int ) ( AimLoc.VALUE() == AimLocation.head ? enemy.DistanceFromCenter.toHead : enemy.DistanceFromCenter.toBody ) <= DeadZone )
                                 {
                                     return;
                                 }
