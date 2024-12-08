@@ -4,7 +4,7 @@ namespace SCB.Atomics
 {
     using ASC = AtomicSupportClass;
 
-    public unsafe class AtomicInt32( int value ) : UnsafeAtomicNumerics<int>( value )
+    sealed unsafe partial class AtomicInt32( int value ) : UnsafeAtomicNumerics<int>( value )
     {
         private bool disposed = false;
         public Dictionary<ASC.AtomicOps, Func<int, int, int>> SignedArithmeticOperations { get; set; } = ASC.ArithmeticOperations<int>();
@@ -115,7 +115,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -132,7 +132,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -149,7 +149,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -499,7 +499,7 @@ namespace SCB.Atomics
 
 
 
-    public unsafe class AtomicUint32( uint value ) : UnsafeAtomicNumerics<uint>( value )
+    sealed unsafe partial class AtomicUint32( uint value ) : UnsafeAtomicNumerics<uint>( value )
     {
         private bool disposed = false;
         public Dictionary<ASC.AtomicOps, Func<uint, uint, uint>> UnsignedArithmeticOperations { get; set; } = ASC.ArithmeticOperations<uint>();
@@ -608,7 +608,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -625,7 +625,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -642,7 +642,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }

@@ -5,7 +5,7 @@ namespace SCB.Atomics
 {
     using ASC = AtomicSupportClass;
 
-    public unsafe class AtomicFloat( float value ) : UnsafeAtomicNumerics<float>( value )
+    sealed unsafe partial class AtomicFloat( float value ) : UnsafeAtomicNumerics<float>( value )
     {
         private bool disposed = false;
         public Dictionary<ASC.AtomicOps, Func<float, float, float>> FloatArithmeticOperations { get; set; } = ASC.ArithmeticOperations<float>();
@@ -66,7 +66,7 @@ namespace SCB.Atomics
         public float Negate()
         {
             float readValue = ReadFloat();
-            Write( -readValue );
+            VALUE( -readValue );
             return -readValue;
         }
 
@@ -75,7 +75,7 @@ namespace SCB.Atomics
         {
             float readValue = ReadFloat();
             float result = float.Sqrt( readValue );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -84,7 +84,7 @@ namespace SCB.Atomics
         {
             float readValue = ReadFloat();
             float result = float.Pow( readValue, value );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -93,7 +93,7 @@ namespace SCB.Atomics
         {
             float readValue = ReadFloat();
             float result = float.Log( readValue, value );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -102,7 +102,7 @@ namespace SCB.Atomics
         {
             float readValue = ReadFloat();
             float result = float.Log10( readValue );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -111,7 +111,7 @@ namespace SCB.Atomics
         {
             float readValue = ReadFloat();
             float result = float.Exp( readValue );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -120,7 +120,7 @@ namespace SCB.Atomics
         {
             float readValue = ReadFloat();
             float result = float.Floor( readValue );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -129,7 +129,7 @@ namespace SCB.Atomics
         {
             float readValue = ReadFloat();
             float result = float.Ceiling( readValue );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -138,7 +138,7 @@ namespace SCB.Atomics
         {
             float readValue = ReadFloat();
             float result = float.Round( readValue );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -156,7 +156,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -428,7 +428,7 @@ namespace SCB.Atomics
 
 
 
-    public unsafe class AtomicDouble( double value ) : UnsafeAtomicNumerics<double>( value )
+    sealed unsafe partial class AtomicDouble( double value ) : UnsafeAtomicNumerics<double>( value )
     {
         private bool disposed = false;
         public Dictionary<ASC.AtomicOps, Func<double, double, double>> DoubleArithmeticOperations { get; set; } = ASC.ArithmeticOperations<double>();
@@ -489,7 +489,7 @@ namespace SCB.Atomics
         public double Negate()
         {
             double readValue = ReadDouble();
-            Write( -readValue );
+            VALUE( -readValue );
             return -readValue;
         }
 
@@ -498,7 +498,7 @@ namespace SCB.Atomics
         {
             double readValue = ReadDouble();
             double result = double.Sqrt( readValue );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -507,7 +507,7 @@ namespace SCB.Atomics
         {
             double readValue = ReadDouble();
             double result = double.Pow( readValue, value );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -516,7 +516,7 @@ namespace SCB.Atomics
         {
             double readValue = ReadDouble();
             double result = double.Log( readValue, value );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -525,7 +525,7 @@ namespace SCB.Atomics
         {
             double readValue = ReadDouble();
             double result = double.Log10( readValue );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -534,7 +534,7 @@ namespace SCB.Atomics
         {
             double readValue = ReadDouble();
             double result = double.Exp( readValue );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -543,7 +543,7 @@ namespace SCB.Atomics
         {
             double readValue = ReadDouble();
             double result = double.Floor( readValue );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -552,7 +552,7 @@ namespace SCB.Atomics
         {
             double readValue = ReadDouble();
             double result = double.Ceiling( readValue );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -561,7 +561,7 @@ namespace SCB.Atomics
         {
             double readValue = ReadDouble();
             double result = double.Round( readValue );
-            Write( result );
+            VALUE( result );
             return result;
         }
 
@@ -577,7 +577,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }

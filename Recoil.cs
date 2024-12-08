@@ -316,7 +316,7 @@ namespace Recoil
     {
         public event EventHandler<RecoilPattern> RecoilPatternChanged;
 
-        private Dictionary<string, RecoilPattern> patternDatabase = new();
+        private Dictionary<string, RecoilPattern> patternDatabase = [];
         private readonly object databaseLock = new();
 
         //original window size is static at 1440x2560       

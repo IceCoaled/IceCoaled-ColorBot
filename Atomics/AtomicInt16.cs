@@ -6,7 +6,7 @@ namespace SCB.Atomics
     using ASC = AtomicSupportClass;
 
 
-    public unsafe class AtomicInt16( short value ) : UnsafeAtomicNumerics<short>( value )
+    sealed unsafe partial class AtomicInt16( short value ) : UnsafeAtomicNumerics<short>( value )
     {
         private bool disposed = false;
         public Dictionary<ASC.AtomicOps, Func<short, short, short>> SignedArithmeticOperations { get; set; } = ASC.ArithmeticOperations<short>();
@@ -116,7 +116,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -134,7 +134,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -151,7 +151,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -421,12 +421,6 @@ namespace SCB.Atomics
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static short operator |( int value, AtomicInt16 atomic )
-        {
-            return ( short ) ( value | atomic.ReadInt16() );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static short operator |( AtomicInt16 atomic1, AtomicInt16 atomic2 )
         {
             return ( short ) ( atomic1.ReadInt16() | atomic2.ReadInt16() );
@@ -498,7 +492,7 @@ namespace SCB.Atomics
 
 
 
-    public unsafe class AtomicUint16( ushort value ) : UnsafeAtomicNumerics<ushort>( value )
+    sealed unsafe partial class AtomicUint16( ushort value ) : UnsafeAtomicNumerics<ushort>( value )
     {
         private bool disposed = false;
         public Dictionary<ASC.AtomicOps, Func<ushort, ushort, ushort>> UnsignedArithmeticOperations { get; set; } = ASC.ArithmeticOperations<ushort>();
@@ -607,7 +601,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -624,7 +618,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -641,7 +635,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }

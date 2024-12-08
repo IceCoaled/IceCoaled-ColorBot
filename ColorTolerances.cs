@@ -221,30 +221,15 @@
         }
 
         /// <summary>
-        /// Validates the input dictionary to ensure it matches the stored tolerances dictionary in count.
-        /// </summary>
-        /// <param name="ctorDictionary">The dictionary to validate against the internal tolerances dictionary.</param>
-        /// <returns><c>true</c> if the dictionary matches the count; otherwise, <c>false</c>.</returns>
-        internal virtual bool ValidateTolerances( ref Dictionary<string, List<ColorTolerance>> ctorDictionary )
-        {
-            if ( ctorDictionary.Count != Tolerances.Count )
-            {
-                ErrorHandler.HandleException( new Exception( $"Feature has {ctorDictionary.Count} elements, expected {Tolerances.Count}" ) );
-                return false;
-            }
-            return true;
-        }
-
-        /// <summary>
         /// Validates the input list to ensure its count matches the expected count in the stored tolerances dictionary.
         /// </summary>
         /// <param name="ctorList">The list to validate against the count of items in the internal tolerances dictionary.</param>
         /// <returns><c>true</c> if the list count matches the expected count; otherwise, <c>false</c>.</returns>
         internal virtual bool ValidateTolerances( List<ColorTolerance> ctorList )
         {
-            if ( ctorList.Count != Tolerances.Count )
+            if ( ctorList.Count != Tolerances.Values.First().Count ) //< This should always be one. So this should be safe
             {
-                ErrorHandler.HandleException( new Exception( $"Feature has {ctorList.Count} elements, expected {Tolerances.Count}" ) );
+                ErrorHandler.HandleException( new Exception( $"Feature has {ctorList.Count} elements, expected {Tolerances.Values.First().Count}" ) );
                 return false;
             }
             return true;
@@ -293,9 +278,9 @@
         internal List<ToleranceBase> CharacterFeatures { get; private set; }
 
         /// <summary>
-        /// Stores a list of color tolerances for different character outfits.
+        /// List of all swap colors used for highlighting or other visual effects.
         /// </summary>
-        internal List<ToleranceBase> OutfitColors { get; private set; }
+        internal List<Color> SwapColorsList { get; private set; }
 
 
 
@@ -306,10 +291,13 @@
         internal ColorToleranceManager()
         {
             // Set up color tolerances for character outlines, features, and outfits
-            if ( !InitOutlines() || !InitCharacterFeatures() || !InitCharacterOutfits() )
+            if ( !InitOutlines() || !InitCharacterFeatures() )
             {
                 ErrorHandler.HandleException( new Exception( "ColorToleranceManager failed to initialize" ) );
             }
+
+            // Get all swap colors used for highlighting or other visual effects
+            GetAllSwapColors();
 
             // Register the OutlineUpdateHandler to handle outline color updates
             PlayerData.OnUpdate += OutlineUpdateHandler;
@@ -348,13 +336,13 @@
             // Define color tolerances for various outline colors
             CharacterOutlines = new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
             {
-                { "orange", new List<ColorTolerance> { new( 244, 255, 140, 244, 75, 108 ) } },
-                { "red", new List<ColorTolerance> { new( 247, 255, 100, 130, 80, 135 ) } },
-                { "green", new List<ColorTolerance> { new( 30, 110, 240, 255, 30, 97 ) } },
-                { "cyan", new List<ColorTolerance> { new( 60, 110, 230, 255, 230, 255 ) } },
-                { "yellow", new List<ColorTolerance> { new( 237, 255, 237, 255, 78, 133 ) } },
-                { "purple", new List<ColorTolerance> { new( 194, 255, 60, 99, 144, 255 ) } }
-            }, Color.Purple, "orange" );
+                { "orange", new List<ColorTolerance> { new( 243, 255, 138, 246, 73, 110 ) } },
+                { "red", new List<ColorTolerance> { new( 245, 255, 98, 132, 78, 137 ) } },
+                { "green", new List<ColorTolerance> { new( 28, 112, 238, 255, 28, 100 ) } },
+                { "cyan", new List<ColorTolerance> { new( 58, 112, 228, 255, 228, 255 ) } },
+                { "yellow", new List<ColorTolerance> { new( 235, 255, 235, 255, 76, 135 ) } },
+                { "purple", new List<ColorTolerance> { new( 192, 255, 58, 102, 142, 255 ) } }
+            }, Color.Purple, "outlnz" );
 
 
             // Validate the number of elements in CharacterOutlines
@@ -379,71 +367,33 @@
         private bool InitCharacterFeatures()
         {
 
-            // Define color tolerances for different character features
-            var Hair = new ColorTolerance[ 8 ]
+            // Define color tolerances for hair colors
+            var Hair = new ColorTolerance[ 9 ]
             {
-                new(13, 53, 49, 89, 61, 101),
-                new(50, 90, 78, 118, 70, 110),
-                new(16, 56, 54, 94, 58, 98),
-                new(25, 65, 57, 97, 57, 97),
-                new(33, 73, 61, 101, 56, 96),
-                new(35, 75, 64, 104, 62, 102),
-                new(18, 58, 43, 83, 57, 97),
-                new(14, 54, 32, 72, 45, 85)
+                new(206, 216, 179, 189, 126, 136),
+                new(69, 79, 76, 86, 88, 98),
+                new(181, 191, 108, 118, 66, 76),
+                new(121, 131, 108, 118, 82, 92),
+                new(91, 101, 51, 61, 28, 38),
+                new(72, 82, 31, 41, 22, 32),
+                new(190, 200, 206, 216, 223, 233),
+                new(105, 115, 174, 184, 132, 142),
+                new(121, 131, 79, 89, 154, 164)
             };
 
-            var Eyes = new ColorTolerance[ 8 ]
+            // Define color tolerances for skin tones
+            var Skin = new ColorTolerance[ 10 ]
             {
-                new(0, 38, 18, 58, 25, 65),
-                new(29, 69, 20, 60, 15, 55),
-                new(48, 88, 73, 113, 79, 119),
-                new(65, 105, 81, 121, 86, 126),
-                new(75, 115, 85, 125, 85, 125),
-                new(68, 108, 74, 114, 38, 78),
-                new(84, 124, 77, 117, 50, 90),
-                new(71, 111, 61, 101, 36, 76)
-            };
-
-            var EyeBrows = new ColorTolerance[ 10 ]
-            {
-                new(16, 56, 37, 77, 45, 85),
-                new(38, 78, 30, 70, 25, 65),
-                new(53, 93, 44, 84, 37, 77),
-                new(90, 130, 74, 114, 55, 95),
-                new(110, 150, 89, 129, 63, 103),
-                new(38, 78, 28, 68, 19, 59),
-                new(80, 120, 39, 79, 22, 62),
-                new(105, 145, 76, 116, 68, 108),
-                new(135, 175, 129, 169, 135, 175),
-                new(43, 83, 37, 77, 30, 70)
-            };
-
-            var Lips = new ColorTolerance[ 10 ]
-            {
-                new(22, 62, 42, 82, 52, 92),
-                new(50, 90, 44, 84, 49, 89),
-                new(79, 119, 66, 106, 64, 104),
-                new(67, 107, 54, 94, 53, 93),
-                new(65, 105, 50, 90, 45, 85),
-                new(80, 120, 55, 95, 38, 78),
-                new(104, 144, 60, 100, 46, 86),
-                new(104, 144, 58, 98, 43, 83),
-                new(104, 144, 68, 108, 56, 96),
-                new(23, 63, 18, 58, 13, 53)
-            };
-
-            var SkinTones = new ColorTolerance[ 10 ]
-            {
-                new(17, 57, 40, 80, 70, 110),
-                new(68, 108, 54, 94, 58, 98),
-                new(61, 101, 48, 88, 40, 80),
-                new(66, 106, 49, 89, 36, 76),
-                new(63, 103, 61, 101, 54, 94),
-                new(84, 124, 76, 116, 69, 109),
-                new(74, 114, 69, 109, 69, 109),
-                new(80, 120, 72, 112, 69, 109),
-                new(92, 132, 79, 119, 67, 107),
-                new(14, 54, 20, 60, 25, 65)
+                new(143, 153, 80, 90, 64, 74),
+                new(140, 150, 84, 94, 61, 71),
+                new(154, 164, 96, 106, 69, 79),
+                new(176, 186, 116, 126, 88, 98),
+                new(187, 197, 122, 132, 88, 98),
+                new(212, 222, 153, 163, 110, 120),
+                new(214, 224, 165, 175, 124, 134),
+                new(204, 214, 146, 156, 124, 134),
+                new(220, 230, 157, 167, 132, 142),
+                new(220, 230, 168, 178, 148, 158)
             };
 
             // Initialize CharacterFeatures with distinct swap colors
@@ -452,30 +402,30 @@
                 new( new Dictionary<string, List<ColorTolerance>>
                 {
                      { "Hair", new List<ColorTolerance>( Hair ) }
-                }, Color.SaddleBrown, "Hair" ),
+                }, Color.DeepPink, "Hair" ),
                 new( new Dictionary<string, List<ColorTolerance>>
                 {
-                     { "Eyes", new List<ColorTolerance>( Eyes ) }
-                }, Color.Teal, "Eyes" ),
-                new( new Dictionary<string, List<ColorTolerance>>
-                {
-                     { "EyeBrows", new List<ColorTolerance>( EyeBrows ) }
-                }, Color.Tomato, "EyeBrows" ),
-                new( new Dictionary<string, List<ColorTolerance>>
-                {
-                     { "Lips", new List<ColorTolerance>( Lips ) }
-                }, Color.DeepPink, "Lips" ),
-                new( new Dictionary<string, List<ColorTolerance>>
-                {
-                     { "SkinTones", new List<ColorTolerance>( SkinTones ) }
-                }, Color.BurlyWood, "SkinTones" )
+                     { "Skin", new List<ColorTolerance>( Skin ) }
+                }, Color.Gold, "Skin" )
             ];
 
 
             // Validate the number of elements in CharacterFeatures
-            if ( CharacterFeatures.Count != 5 )
+            if ( CharacterFeatures.Count != 2 )
             {
                 ErrorHandler.HandleException( new Exception( "CharacterFeatures has incorrect number of elements" ) );
+                return false;
+            }
+
+            if ( !CharacterFeatures[ 0 ].ValidateTolerances( Hair.AsEnumerable().ToList() ) )
+            {
+                ErrorHandler.HandleException( new Exception( "CharacterFeatures( Hair ) has incorrect number of elements" ) );
+                return false;
+            }
+
+            if ( !CharacterFeatures[ 1 ].ValidateTolerances( Skin.AsEnumerable().ToList() ) )
+            {
+                ErrorHandler.HandleException( new Exception( "CharacterFeatures( Skin ) has incorrect number of elements" ) );
                 return false;
             }
 
@@ -487,66 +437,18 @@
         }
 
         /// <summary>
-        /// Initializes color tolerances for various character outfits.
-        /// </summary>
-        /// <returns>True if initialization is successful; otherwise, false.</returns>
-        private bool InitCharacterOutfits()
+        /// Gets all swap colors used for highlighting or other visual effects.
+        /// </summary>  
+        private void GetAllSwapColors()
         {
-
-            // Define color tolerances for different outfits
-            OutfitColors =
+            SwapColorsList =
             [
-                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
-                {
-                    { "bloodlust", new List<ColorTolerance> { new( 0, 34, 0, 38, 0, 40 ), new( 3, 43, 6, 46, 10, 50 ), new( 0, 27, 0, 28, 0, 30 ) } }
-                }, Color.Firebrick, "bloodlust" ),
-                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
-                {
-                    { "elegantOperative", new List<ColorTolerance> { new( 0, 23, 0, 24, 0, 22 ), new( 26, 66, 30, 70, 38, 78 ), new( 25, 65, 30, 70, 40, 80 ) } }
-                    }, Color.DarkSlateGray, "elegantOperative" ),
-                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
-                {
-                    { "prince", new List<ColorTolerance> { new( 0, 20, 0, 20, 0, 20 ), new( 2, 42, 4, 44, 8, 48 ), new( 35, 75, 37, 77, 48, 88 ) } }
-                }, Color.BlueViolet, "prince" ),
-                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
-                {
-                    { "starbright", new List<ColorTolerance> { new( 0, 21, 0, 21, 0, 21 ), new( 3, 43, 5, 45, 9, 49 ), new( 0, 27, 0, 28, 0, 29 ) } }
-                }, Color.Gold, "starbright" ),
-                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
-                {
-                    { "generic", new List<ColorTolerance> { new( 0, 20, 0, 20, 0, 20 ), new( 0, 20, 0, 20, 0, 20 ), new( 0, 20, 0, 20, 0, 20 ) } } //< this covers honorIntBattle, popstar, zeroFour, risingStarAlpha, risingStarBeta
-                }, Color.Silver, "generic" ),
-                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
-                {
-                    { "default1", new List<ColorTolerance> { new( 9, 49, 6, 46, 3, 43 ), new( 11, 51, 30, 70, 48, 88 ), new( 91, 131, 135, 175, 127, 167 ) } }
-                }, Color.LightSalmon, "default1" ),
-                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
-                {
-                    { "default2", new List<ColorTolerance> { new( 8, 48, 10, 50, 8, 48 ), new( 34, 74, 62, 102, 65, 105 ), new( 104, 144, 114, 154, 109, 149 ), new( 25, 65, 60, 100, 60, 100 ) } }
-                }, Color.SteelBlue, "default2" ),
-                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
-                {
-                    { "default3", new List<ColorTolerance> { new( 0, 35, 0, 35, 0, 33 ), new( 7, 47, 24, 64, 24, 64 ), new( 98, 138, 86, 126, 61, 101 ) } }
-                }, Color.MediumSlateBlue, "default3" ),
-                new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
-                {
-                    { "halloween", new List<ColorTolerance> { new( 0, 34, 0, 38, 0, 40 ), new( 3, 43, 6, 46, 10, 50 ), new( 0, 27, 0, 28, 0, 30 ) } }
-                }, Color.OrangeRed, "halloween" )
+                CharacterOutlines.GetSwapColor()
             ];
-
-
-            // Validate the number of elements in OutfitColors
-            if ( OutfitColors.Count != 9 )
+            foreach ( var feature in CharacterFeatures )
             {
-                ErrorHandler.HandleException( new Exception( "OutfitColors has incorrect number of elements" ) );
-                return false;
+                SwapColorsList.Add( feature.GetSwapColor() );
             }
-
-#if DEBUG
-            Logger.Log( "OutfitColors initialized successfully" );
-#endif
-
-            return true;
         }
     }
 }

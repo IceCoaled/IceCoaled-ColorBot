@@ -602,4 +602,18 @@ namespace Utils
         private const int SWP_NOMOVE = 0x0002;
         private const int SWP_NOSIZE = 0x0001;
     }
+
+
+    internal static class SafeReleaseHelper
+    {
+        internal static readonly Action<IDisposable?> SafeDispose = obj =>
+        {
+            if ( obj is not null )
+            {
+                obj.Dispose();
+                obj = default!;
+            }
+        };
+
+    }
 }

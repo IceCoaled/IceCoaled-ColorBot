@@ -1,8 +1,9 @@
-﻿using Recoil;
+﻿using System.Runtime.InteropServices;
+using Recoil;
 
 namespace SCB
 {
-    internal class ManagerInit : IDisposable
+    internal partial class ManagerInit : IDisposable
     {
         // Disposal flag
         private bool disposed;
@@ -17,25 +18,40 @@ namespace SCB
         internal ColorToleranceManager? colorToleranceManager;
         internal FileManager? fileManager;
 
+        // RenderDoc class
+        internal RenderDocApi? renderDocApi;
+
         Thread? smartuiKeyThread;
         Thread? smartGameThread;
 
         // Notify icon
         internal NotifyIcon? trayIcon;
 
-        internal ManagerInit()
+
+        /// <summary>
+        /// Constructor for ManagerInit
+        /// </summary>
+        /// <param name="rDocClass"></param>
+        internal ManagerInit( [Optional] RenderDocApi rDocClass )
         {
+            if ( rDocClass != null )
+            {
+                renderDocApi = rDocClass;
+            }
+
             // Initialize class instances
             fileManager = new();
             fileManager.Initialize();
             recoilPatternProcessor = new(); // Starts recoil pattern thread in constructor
             colorToleranceManager = new(); // Initializes color tolerances in constructor
 
-            // Initialize directx11
-            directX11 = new( ref colorToleranceManager );
+            // Initialize Aimbot
+            aimbot = new( ref recoilPatternProcessor! );
 
-            aimbot = new( ref recoilPatternProcessor, ref directX11 );
+            // Initialize enemy scanning
+            EnemyScanning.Initialize( colorToleranceManager.SwapColorsList );
 
+            // Start util threads
             Task.Run( async () => await SetupThreads() );
         }
 
@@ -47,13 +63,16 @@ namespace SCB
         private async Task SetupThreads()
         {
             // Sleep for 10 seconds to let main form to load
-            await Task.Delay( 10000 );
+            await Task.Delay( 5000 );
 
             // Start smartUiKey thread
             smartuiKeyThread = new( () => Utils.UtilsThreads.UiSmartKey( trayIcon!, iceBot! ) );
 
             // Start smartGame thread
             smartGameThread = new( () => Utils.UtilsThreads.SmartGameCheck( ref fileManager! ) );
+
+            smartuiKeyThread.Start();
+            smartGameThread.Start();
         }
 
 

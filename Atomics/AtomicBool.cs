@@ -6,7 +6,7 @@ namespace SCB.Atomics
     using ASC = AtomicSupportClass;
 
 
-    public unsafe class AtomicBool( bool value ) : UnsafeAtomicNumerics<bool>( value )
+    sealed unsafe partial class AtomicBool( bool value ) : UnsafeAtomicNumerics<bool>( value )
     {
         private bool disposed = false;
         public Dictionary<ASC.AtomicOps, Func<bool, bool, bool>> BoolOperations { get; set; } = ASC.BoolOperations();
@@ -47,7 +47,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }

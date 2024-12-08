@@ -17,41 +17,17 @@ namespace SCB
     /// Represents event data for a player data update callback, containing the updated variable and its name.
     /// </summary>
     /// <typeparam name="T">The type of the updated variable.</typeparam>
-    public sealed class PlayerUpdateCallbackEventArgs : EventArgs
+    public sealed class PlayerUpdateCallbackEventArgs( dynamic updatedVar, UpdateType key ) : EventArgs
     {
         /// <summary>
         /// Gets the updated variable.
         /// </summary>
-        public dynamic UpdatedVar { get; }
+        public dynamic UpdatedVar { get; private set; } = updatedVar;
 
         /// <summary>
         /// Gets the update type.
         /// </summary>
-        public UpdateType Key { get; }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="PlayerUpdateCallbackEventArgs"/> class with the specified updated variable and variable name.
-        /// </summary>
-        /// <param name="updatedVar">The updated variable.</param>
-        /// <param name="key">The update type.</param>
-        public PlayerUpdateCallbackEventArgs( dynamic updatedVar, UpdateType key )
-        {
-            UpdatedVar = updatedVar;
-            Key = key;
-#if DEBUG
-            LogUpdate();
-#endif
-        }
-
-        /// <summary>
-        /// Logs the update details in debug mode.
-        /// </summary>
-        private void LogUpdate()
-        {
-#if DEBUG
-            Logger.Log( this.ToString() );
-#endif
-        }
+        public UpdateType Key { get; private set; } = key;
     }
 
 

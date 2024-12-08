@@ -97,6 +97,8 @@ namespace SCB
         /// </summary>
         internal class PlayerConfigs( SettingsLoadedHandler? UpdateSettingUiDelegate )
         {
+            static readonly string pvokeRect = "PInvoke.RECT";
+
             private readonly SettingsLoadedHandler? OnSettingsLoaded = UpdateSettingUiDelegate;
 
             private readonly JsonSerializerOptions options = new()
@@ -117,13 +119,23 @@ namespace SCB
                 // Create blob of player data           
                 Type? playerDataBlob = typeof( PlayerData );
 
+                // Get the Name of any eventsin the player data blob.
+                // This is necessary because the JsonSerializer will throw an exception if it encounters an event.
+                // So we get the names then exclude them from the fields we serialize.
+
                 // Get all the fields in the player data blob
                 Dictionary<string, object?>? blobFields = null;
                 try
                 {
                     blobFields = playerDataBlob
                      .GetFields( BindingFlags.Static | BindingFlags.NonPublic )
-                     .Where( x => x.FieldType != typeof( IntPtr ) && x.FieldType != typeof( object ) ) // Filter out unsupported types
+                     .Where( x => x.FieldType != typeof( IntPtr ) &&
+                     x.FieldType != typeof( object ) &&
+                     x.FieldType != typeof( EventHandler ) &&
+                     !typeof( MulticastDelegate ).IsAssignableFrom( x.FieldType ) &&
+                     x.FieldType.FullName != pvokeRect &&
+                     !x.IsSpecialName &&
+                     !x.IsPublic ) // Filter out unsupported types
                      .ToDictionary( x => x.Name, x => x.GetValue( null ) );
 
                 } catch ( Exception ex )
@@ -226,7 +238,7 @@ namespace SCB
                         {
                             nonJsonVar = jsonElement.GetString();
 
-                            if ( setting.Key == "localColorToleranceName" && nonJsonVar is string toleranceName )
+                            if ( setting.Key == "localOutlineColor" && nonJsonVar is string toleranceName )
                             {
                                 colorToleranceName = toleranceName;
                             }
@@ -240,7 +252,7 @@ namespace SCB
                 }
 
                 // Set the color tolerance
-                PlayerData.SetColorToleranceName( colorToleranceName );
+                PlayerData.SetOutlineColor( colorToleranceName );
 
 
                 // Just for debugging purposes
@@ -274,9 +286,9 @@ namespace SCB
                 Logger.Log( "Aim Fov: " + aimFov );
 
                 Logger.Log( "-------------------" );
-                Logger.Log( "Color Tolerance: " + PlayerData.GetColorToleranceName() );
+                Logger.Log( "Color Tolerance: " + PlayerData.GetOutlineColor() );
 
-                var debugTolerance = PlayerData.GetColorToleranceName();
+                var debugTolerance = PlayerData.GetOutlineColor();
 
                 Logger.Log( $"Selected Outline Color: {debugTolerance}" );
 

@@ -1,9 +1,11 @@
-﻿using System.Drawing.Drawing2D;
+﻿using System.ComponentModel;
+using System.Drawing.Drawing2D;
 
 namespace SCB
 {
     internal partial class Bezier : MaterialSkin.Controls.MaterialForm
     {
+        [DesignerSerializationVisibility( DesignerSerializationVisibility.Hidden )]
         internal bool UserSelected { get; set; } = false;
 
         private Utils.BezierPointCollection bezierPoints;
@@ -37,9 +39,9 @@ namespace SCB
 
             // Customize the color scheme (primary, accent, text shade)
             materialSkinManager.ColorScheme = new MaterialSkin.ColorScheme(
-                MaterialSkin.Primary.Purple500, MaterialSkin.Primary.Purple600,
-                MaterialSkin.Primary.Yellow400, MaterialSkin.Accent.Pink400,
-                MaterialSkin.TextShade.WHITE );
+            MaterialSkin.Primary.Purple500, MaterialSkin.Primary.Purple600,
+            MaterialSkin.Primary.Yellow400, MaterialSkin.Accent.Pink400,
+            MaterialSkin.TextShade.WHITE );
 
             // Initialize the start and end points to static positions
             PointF startPoint = new( this.Width / 2, this.Height - 50 );

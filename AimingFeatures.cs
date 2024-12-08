@@ -1,13 +1,14 @@
-﻿
-
-using System.Diagnostics;
+﻿using System.Diagnostics;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using Recoil;
 using SCB.Atomics;
 
+
+
 namespace SCB
 {
-    internal class Aimbot : IDisposable
+    internal partial class Aimbot : IDisposable
     {
         // IDisposable implementation
         private bool disposed;
@@ -19,32 +20,32 @@ namespace SCB
         private readonly AtomicBool Prediction;
         private readonly AtomicInt32 AimKey;
         private readonly AtomicInt32 DeadZone;
-        private readonly UnsafeAtomicNumerics<AimLocation> AimLoc;
+        private readonly AtomicInt32 AimLoc;
 
         // In game settings
         private readonly AtomicFloat MouseSensitivity;
         private readonly AtomicFloat AdsScale;
 
         // Thread and cancellation token for enemy scanning
-        private readonly DirectX11 directX11;
+        private DirectX11? directX11;
         private Thread? enemyScannerThread;
         private Thread? aimFeatureThread;
         private CancellationTokenSource enemeyCancellation = new();
         private readonly PingPongBuffer<EnemyData> enemyBuffer = new( 10 );
-        private readonly UnsafeAtomicNumerics<bool> BufferReady = new( false );
+        private readonly AtomicBool BufferReady;
 
         // Recoil pattern processor
         private readonly RecoilPatternProcessor recoilPatternProcessor;
         private RecoilPattern? currentPattern;
 
         // Lock objects for thread safety
-        private readonly object recoilLock = new();
-        private readonly object bufferLock = new();
+        private readonly Lock recoilLock = new();
+        private readonly Lock bufferLock = new();
 
         // Game window variables
         private PointF centerOfGameWindow;
 
-        internal Aimbot( ref RecoilPatternProcessor recoilProcessor, ref DirectX11 dx11 )
+        internal Aimbot( ref RecoilPatternProcessor recoilProcessor )
         {
             // Set the UserSettings
             var playerSettings = PlayerData.GetAimSettings();
@@ -54,17 +55,16 @@ namespace SCB
             Prediction = new AtomicBool( playerSettings.prediction );
             AimKey = new AtomicInt32( playerSettings.aimKey );
             DeadZone = new AtomicInt32( playerSettings.deadZone );
-            AimLoc = new UnsafeAtomicNumerics<AimLocation>( playerSettings.location );
+            AimLoc = new AtomicInt32( ( int ) playerSettings.location );
             // Set in game settings
             MouseSensitivity = new AtomicFloat( playerSettings.mouseSens );
             AdsScale = new AtomicFloat( playerSettings.adsScale );
 
+            // Initialize the buffer ready flag 
+            BufferReady = new AtomicBool( false );
 
             // Get the game window rect
             var gameRect = PlayerData.GetRect();
-
-            // Initialize the DirectX11 capture
-            directX11 = dx11;
 
             // Calculate the center of the game window
             centerOfGameWindow = new PointF
@@ -80,20 +80,8 @@ namespace SCB
             PlayerData.OnUpdate += AimSettingsUpdate;
             recoilPatternProcessor.RecoilPatternChanged += RecoilPatternUpdate!;
 
-
 #if DEBUG
-            string aimBotSettings = $"Aim Speed: {AimSpeed.VALUE()}\n" +
-                                    $"Aim Smoothing: {AimSmoothing.VALUE()}\n" +
-                                    $"Anti-Recoil: {AntiRecoil.VALUE()}\n" +
-                                    $"Prediction: {Prediction.VALUE()}\n" +
-                                    $"Aim Key: {AimKey.VALUE()}\n" +
-                                    $"Dead Zone: {DeadZone.VALUE()}\n" +
-                                    $"Aim Location: {AimLoc.VALUE()}\n" +
-                                    $"Mouse Sensitivity: {MouseSensitivity.VALUE()}\n" +
-                                    $"ADS Scale: {AdsScale.VALUE()}";
-
-            Logger.Log( aimBotSettings );
-            Logger.Log( "Aimbot started" );
+            Logger.Log( "Aimbot initialized" );
 #endif
         }
 
@@ -199,8 +187,8 @@ namespace SCB
                 if ( activateAntiRecoil )
                 {
                     double elapsed = recoilTimer.Elapsed.TotalMilliseconds;
-                    float recoilX = centerOfGameWindow.X - currentPattern.Pattern.ElementAtOrDefault( ( int ) elapsed ).Key.X;
-                    float recoilY = centerOfGameWindow.Y - currentPattern.Pattern.ElementAtOrDefault( ( int ) elapsed ).Key.Y;
+                    float recoilX = centerOfGameWindow.X - currentPattern!.Pattern.ElementAtOrDefault( ( int ) elapsed ).Key.X;
+                    float recoilY = centerOfGameWindow.Y - currentPattern!.Pattern.ElementAtOrDefault( ( int ) elapsed ).Key.Y;
 
                     // Check if return values arent default( if recoilX = centerOfGameWindow.X, or recoilY = centerOfGameWindow.Y, then the pattern is empty)
                     if ( recoilX == centerOfGameWindow.X && recoilY == centerOfGameWindow.Y )
@@ -265,12 +253,22 @@ namespace SCB
                     screenCap = null;
                 }
 
+                // If the user changed the outline color, the directX11 class needs to be reset
+                while ( directX11.ResettingClass.Wait( 10 ) )
+                {
+                    // we use yield to just play nice with the system
+                    Thread.Yield();
+                }
+
                 directX11.ProcessFrameAsBitmap( ref screenCap );
 
-                if ( screenCap != null )
+                if ( screenCap != default )
                 {
+#if DEBUG
                     string randomNum = new Random().Next( 0, 1000000 ).ToString() + ".png";
-                    screenCap.Save( FileManager.enemyScansFolder + randomNum );
+                    screenCap.Save( FileManager.enemyScansFolder + randomNum, ImageFormat.Png );
+                    //EnemyScanning.FilterNonEnemies( screenCap );
+#endif
                 } else
                 {
                     Utils.Watch.MicroSleep( 1000 );
@@ -333,11 +331,11 @@ namespace SCB
                             continue;
                         }
 
-                        if ( ( int ) ( AimLoc.VALUE() == AimLocation.head ? recentFrames.Item1.DistanceFromCenter.toHead : recentFrames.Item1.DistanceFromCenter.toBody ) >= DeadZone ||
-                          ( int ) ( AimLoc.VALUE() == AimLocation.head ? recentFrames.Item2.DistanceFromCenter.toHead : recentFrames.Item2.DistanceFromCenter.toBody ) >= DeadZone )
+                        if ( ( int ) ( AimLoc.VALUE() == ( ( int ) AimLocation.head ) ? recentFrames.Item1.DistanceFromCenter.toHead : recentFrames.Item1.DistanceFromCenter.toBody ) >= DeadZone ||
+                        ( int ) ( AimLoc.VALUE() == ( ( int ) AimLocation.head ) ? recentFrames.Item2.DistanceFromCenter.toHead : recentFrames.Item2.DistanceFromCenter.toBody ) >= DeadZone )
                         {
                             // Perform prediction based on historical data
-                            var targetPos = PredictEnemy( recentFrames, AimLoc.VALUE(), 5.0f );
+                            var targetPos = PredictEnemy( recentFrames, ( ( AimLocation ) AimLoc.VALUE() ), 5.0f );
 
                             // Check if the target position is within the DeadZone
                             if ( Mathf.GetDistance<int>( ref targetPos, ref centerOfGameWindow ) <= DeadZone )
@@ -363,7 +361,7 @@ namespace SCB
                                 enemy = enemyBuffer.GetLatestEntry();
 
                                 // Check if the enemy is within the DeadZone
-                                if ( ( int ) ( AimLoc.VALUE() == AimLocation.head ? enemy.DistanceFromCenter.toHead : enemy.DistanceFromCenter.toBody ) <= DeadZone )
+                                if ( ( int ) ( AimLoc.VALUE() == ( ( int ) AimLocation.head ) ? enemy.DistanceFromCenter.toHead : enemy.DistanceFromCenter.toBody ) <= DeadZone )
                                 {
                                     return;
                                 }
@@ -374,7 +372,7 @@ namespace SCB
                         }
                         if ( MouseInput.IsKeyPressed( ref aimKey ) )
                         {
-                            PointF targetPos = AimLoc.VALUE() == AimLocation.head ? enemy.Head : enemy.Body;
+                            PointF targetPos = AimLoc.VALUE() == ( ( int ) AimLocation.head ) ? enemy.Head : enemy.Body;
                             AimUsingBezier( ref targetPos, enemy.Distance, enemy.SleepTime, ref aimKey );
                         }
                     }
@@ -394,37 +392,80 @@ namespace SCB
         }
 
 
+
+        /// <summary>
+        /// Updates the atomic variable with the new value.
+        /// Just an abstraction to make the code cleaner.
+        /// Because we need to add a reference to the atomic variable before updating it, as the update is done in a different thread.
+        /// </summary>
+        /// <typeparam name="T">UnsafeAtomicNumerics</typeparam>
+        /// <param name="atomicVar">Version of atomic class</param>
+        /// <param name="update">Updated variable</param>
+        /// <param name="updateType">Update type</param>
+        /// <returns>void</returns>
+        private Action UpdateAtomic<T>( T atomicVar, dynamic update, UpdateType updateType ) where T : class
+        {
+
+            // Because we can access private methods with reflection, we are going to bypass the derived classes and access the base class directly.
+            // This is because our VALUE method is overloaded and may cause issues when trying to access the method.
+            const string write = "Write";
+            const string addRef = "AddReference";
+            const string removeRef = "RemoveReference";
+
+            var addReference = atomicVar.GetType().GetMethod( addRef, System.Reflection.BindingFlags.Public );
+            var setValue = atomicVar.GetType().GetMethod( write, System.Reflection.BindingFlags.NonPublic );
+            var removeReference = atomicVar.GetType().GetMethod( removeRef, System.Reflection.BindingFlags.Public );
+
+
+            return () =>
+            {
+                //Add the reference to the atomic variable
+                addReference?.Invoke( atomicVar, null );
+                //Update the atomic variable
+                setValue?.Invoke( atomicVar, updateType == UpdateType.AimLocation ? ( int ) update : update );
+                //Remove the reference to the atomic variable
+                removeReference?.Invoke( atomicVar, null );
+            };
+        }
+
+
+        /// <summary>
+        /// Delegate for the PlayerUpdate event.
+        /// </summary>
+        /// <param name="sender">N/A</param>
+        /// <param name="e">Updated variable class</param>
         private void AimSettingsUpdate( object sender, PlayerUpdateCallbackEventArgs e )
         {
+
             switch ( e.Key )
             {
                 case UpdateType.AimSpeed:
-                AimSpeed.VALUE( e.UpdatedVar );
-                break;
+                UpdateAtomic( AimSpeed, e.UpdatedVar, e.Key )();
+                goto LOG;
                 case UpdateType.Deadzone:
-                DeadZone.VALUE( e.UpdatedVar );
-                break;
+                UpdateAtomic( DeadZone, e.UpdatedVar, e.Key )();
+                goto LOG;
                 case UpdateType.AimSmoothing:
-                AimSmoothing.VALUE( e.UpdatedVar );
-                break;
+                UpdateAtomic( AimSmoothing, e.UpdatedVar, e.Key )();
+                goto LOG;
                 case UpdateType.AimKey:
-                AimKey.VALUE( e.UpdatedVar );
-                break;
+                UpdateAtomic( AimKey, e.UpdatedVar, e.Key )();
+                goto LOG;
                 case UpdateType.AntiRecoil:
-                AntiRecoil.VALUE( e.UpdatedVar );
-                break;
+                UpdateAtomic( AntiRecoil, e.UpdatedVar, e.Key )();
+                goto LOG;
                 case UpdateType.Prediction:
-                Prediction.VALUE( e.UpdatedVar );
-                break;
+                UpdateAtomic( Prediction, e.UpdatedVar, e.Key )();
+                goto LOG;
                 case UpdateType.MouseSens:
-                MouseSensitivity.VALUE( e.UpdatedVar );
-                break;
+                UpdateAtomic( MouseSensitivity, e.UpdatedVar, e.Key )();
+                goto LOG;
                 case UpdateType.AdsScale:
-                AdsScale.VALUE( e.UpdatedVar );
-                break;
+                UpdateAtomic( AdsScale, e.UpdatedVar, e.Key )();
+                goto LOG;
                 case UpdateType.AimLocation:
-                AimLoc.VALUE( e.UpdatedVar );
-                break;
+                UpdateAtomic( AimLoc, e.UpdatedVar, e.Key )();
+                goto LOG;
                 case UpdateType.WindowRect:
                 var gameRect = e.UpdatedVar;
                 centerOfGameWindow = new PointF
@@ -432,11 +473,26 @@ namespace SCB
                     X = ( float ) ( gameRect.right - gameRect.left ) / 2,
                     Y = ( float ) ( gameRect.bottom - gameRect.top ) / 2
                 };
-                break;
+                goto LOG;
+                default:
+                goto END;
             }
+LOG:
+#if DEBUG
+            Logger.Log( $"Aimbot setting updated: {e.Key} = {e.UpdatedVar}" );
+#endif
+
+END:
+            return; //< this is only here so the goto statement doesn't throw an error
         }
 
 
+        /// <summary>
+        /// Delegate for the RecoilPatternChanged event.
+        /// We use a lock for this as its just easier to manage for the aimbot usage.
+        /// </summary>
+        /// <param name="sender">N/A</param>
+        /// <param name="recoilPattern">New recoil Pattern</param>
         private void RecoilPatternUpdate( object sender, RecoilPattern recoilPattern )
         {
             lock ( recoilLock )
@@ -449,19 +505,78 @@ namespace SCB
         internal void Stop()
         {
             enemeyCancellation?.Cancel();
-            enemeyCancellation?.Dispose();
             enemyScannerThread?.Join();
             aimFeatureThread?.Join();
+            enemyBuffer?.ClearReadBuffer();
+            enemyBuffer?.ClearWriteBuffer();
+            enemeyCancellation?.TryReset();
+
+#if DEBUG
+            Logger.Log( "Aimbot stopped" );
+#endif
         }
 
-        internal void Start()
+        internal void Start( [Optional] DirectX11? d3d11 )
         {
+            if ( d3d11 != null )
+            {
+                directX11 = d3d11;
+            }
+
             enemeyCancellation = new CancellationTokenSource();
             enemyScannerThread = new Thread( CaptureAndScan );
             aimFeatureThread = new Thread( AimBot );
 
+            enemyScannerThread.IsBackground = true;
+            aimFeatureThread.IsBackground = true;
+
             enemyScannerThread.Start();
             aimFeatureThread.Start();
+
+#if DEBUG
+
+            string aimBotSettings = $"Aim Speed: {AimSpeed.VALUE()}\n" +
+                                    $"Aim Smoothing: {AimSmoothing.VALUE()}\n" +
+                                    $"Anti-Recoil: {AntiRecoil.VALUE()}\n" +
+                                    $"Prediction: {Prediction.VALUE()}\n" +
+                                    $"Aim Key: {AimKey.VALUE()}\n" +
+                                    $"Dead Zone: {DeadZone.VALUE()}\n" +
+                                    $"Aim Location: {AimLoc.VALUE()}\n" +
+                                    $"Mouse Sensitivity: {MouseSensitivity.VALUE()}\n" +
+                                    $"ADS Scale: {AdsScale.VALUE()}";
+
+            Logger.Log( aimBotSettings );
+            Logger.Log( "Aimbot started" );
+#endif
+        }
+
+
+        /// <summary>
+        /// Checks if the enemy scanner and aim feature threads are running.
+        /// </summary>
+        /// <returns>true if they are else false</returns>
+        internal bool IsRunning()
+        {
+            if ( enemyScannerThread?.IsAlive == true &&
+                aimFeatureThread?.IsAlive == true )
+            {
+                return true;
+            }
+            return false;
+        }
+
+
+        /// <summary>
+        /// Restarts the enemy scanner and aim feature threads.
+        /// </summary>
+        internal void Restart()
+        {
+#if DEBUG
+            Logger.Log( "Restarting aimbot" );
+#endif
+
+            Stop();
+            Start();
         }
 
         public void Dispose()
@@ -476,7 +591,7 @@ namespace SCB
                 disposing )
             {
                 // Cancel and join the threads
-                enemeyCancellation?.Cancel();
+                enemeyCancellation?.TryReset();
                 enemyScannerThread?.Join();
                 aimFeatureThread?.Join();
                 enemeyCancellation?.Dispose();
@@ -498,8 +613,8 @@ namespace SCB
                 BufferReady?.Dispose();
 
                 // Unsubscribe from the event
-                PlayerData.OnUpdate -= AimSettingsUpdate;
-                recoilPatternProcessor.RecoilPatternChanged -= RecoilPatternUpdate;
+                PlayerData.OnUpdate -= AimSettingsUpdate!;
+                recoilPatternProcessor.RecoilPatternChanged -= RecoilPatternUpdate!;
             }
 
             disposed = true;

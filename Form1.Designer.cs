@@ -36,5 +36,7 @@
         private MaterialSkin.Controls.MaterialSlider materialSlider4;
         private MaterialSkin.Controls.MaterialButton materialButton3;
         private MaterialSkin.Controls.MaterialButton materialButton5;
+        private MaterialSkin.Controls.MaterialButton materialButton6;
+        private ToolTip toolTip1;
     }
 }

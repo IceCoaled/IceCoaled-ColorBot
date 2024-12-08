@@ -2,7 +2,10 @@
 //#define GETRECOILPATTERN
 #endif
 
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Drawing.Drawing2D;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MaterialSkin.Controls;
 using Utils;
@@ -12,22 +15,21 @@ namespace SCB
 
     internal partial class IceColorBot : MaterialSkin.Controls.MaterialForm
     {
-        private Panel statusPanel;
-        private Label statusLabel;
-        private NotifyIcon trayIcon;
+
 #if GETRECOILPATTERN
         internal RecoilPatternCapture? recoilPatternCapture;
 #endif
 
-        private Aimbot aimBot;
+        private readonly ManagerInit managerInit;
+        private Panel statusPanel;
+        private Label statusLabel;
         private Bezier bezierForm;
         private Configurations configurationsForm;
 
 
-        internal IceColorBot( NotifyIcon notifyIcon, ref Aimbot aimbot )
+        internal IceColorBot( ref ManagerInit initManager )
         {
-            trayIcon = notifyIcon;
-            aimBot = aimbot;
+            managerInit = initManager;
 
             // Initialize MaterialSkinManager
             var materialSkinManager = MaterialSkin.MaterialSkinManager.Instance;
@@ -45,15 +47,26 @@ namespace SCB
             this.BackgroundImageLayout = ImageLayout.Center;
 
             // Create the tray icon
-            trayIcon = new()
+            managerInit.trayIcon = new()
             {
                 Text = "IceColorBot",
                 Icon = Icon,
                 ContextMenuStrip = new ContextMenuStrip()
             };
-            trayIcon.ContextMenuStrip.Items.Add( "Exit", null, Exit );
-            trayIcon.ContextMenuStrip.Items.Add( "Open", null, ReOpen );
-            trayIcon.Visible = false;
+            managerInit.trayIcon.ContextMenuStrip.Items.Add( "Exit", null, Exit );
+            managerInit.trayIcon.ContextMenuStrip.Items.Add( "Open", null, ReOpen );
+            managerInit.trayIcon.Visible = false;
+
+
+            // Set a few properties for the form
+            // Set the form's icon
+            Icon = Properties.Resources.ResourceManager.GetObject( "$this.Icon" ) as Icon;
+
+            // Set the form's title
+            Text = "IceColorBot";
+
+            // Set the form's border style
+            FormBorderStyle = FormBorderStyle.Fixed3D;
 
 
             // Set the dark mode
@@ -63,12 +76,13 @@ namespace SCB
             InitializeComponent();
             InitializeStatusBar();
 
-            ErrorHandler.Initialize( statusPanel!, statusLabel!, this );
+            ErrorHandler.OnStatusUpdate += UpdateStatusBar;
         }
 
 
         private void InitializeComponent()
         {
+            this.components = new System.ComponentModel.Container();
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager( typeof( IceColorBot ) );
             this.materialSlider1 = new MaterialSlider();
             this.materialSlider2 = new MaterialSlider();
@@ -87,6 +101,8 @@ namespace SCB
             this.materialSlider4 = new MaterialSlider();
             this.materialButton3 = new MaterialButton();
             this.materialButton5 = new MaterialButton();
+            this.materialButton6 = new MaterialButton();
+            this.toolTip1 = new ToolTip( this.components );
             this.SuspendLayout();
             // 
             // materialSlider1
@@ -425,12 +441,44 @@ namespace SCB
             this.materialButton5.UseVisualStyleBackColor = true;
             this.materialButton5.Click += this.materialButton5_Click;
             // 
+            // materialButton6
+            // 
+            this.materialButton6.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            this.materialButton6.Density = MaterialButton.MaterialButtonDensity.Dense;
+            this.materialButton6.Depth = 0;
+            this.materialButton6.Font = new Font( "Segoe UI", 8.25F, FontStyle.Regular, GraphicsUnit.Point, 0 );
+            this.materialButton6.HighEmphasis = true;
+            this.materialButton6.Icon = null;
+            this.materialButton6.Location = new Point( 2, 27 );
+            this.materialButton6.Margin = new Padding( 4, 6, 4, 6 );
+            this.materialButton6.MouseState = MaterialSkin.MouseState.HOVER;
+            this.materialButton6.Name = "materialButton6";
+            this.materialButton6.NoAccentTextColor = Color.Empty;
+            this.materialButton6.Size = new Size( 217, 36 );
+            this.materialButton6.TabIndex = 53;
+            this.materialButton6.Text = "Compositor Registry Key";
+            this.toolTip1.SetToolTip( this.materialButton6, resources.GetString( "materialButton6.ToolTip" ) );
+            this.materialButton6.Type = MaterialButton.MaterialButtonType.Outlined;
+            this.materialButton6.UseAccentColor = true;
+            this.materialButton6.UseVisualStyleBackColor = true;
+            this.materialButton6.Click += this.materialButton6_Click;
+            // 
+            // toolTip1
+            // 
+            this.toolTip1.AutoPopDelay = 500;
+            this.toolTip1.BackColor = Color.MidnightBlue;
+            this.toolTip1.InitialDelay = 500;
+            this.toolTip1.ReshowDelay = 100;
+            this.toolTip1.ToolTipIcon = ToolTipIcon.Info;
+            this.toolTip1.ToolTipTitle = "ForceFullScreenUpdate";
+            // 
             // IceColorBot
             // 
             this.BackColor = Color.MidnightBlue;
             this.BackgroundImage = ( Image ) resources.GetObject( "$this.BackgroundImage" );
             this.BackgroundImageLayout = ImageLayout.Center;
             this.ClientSize = new Size( 579, 583 );
+            this.Controls.Add( this.materialButton6 );
             this.Controls.Add( this.materialButton5 );
             this.Controls.Add( this.materialButton3 );
             this.Controls.Add( this.materialSlider4 );
@@ -487,14 +535,18 @@ namespace SCB
             this.Controls.Add( statusPanel );
         }
 
+
+
         private void Exit( object? sender, EventArgs e )
         {
             OnFormClosed( new( CloseReason.UserClosing ) );
         }
 
+
+
         private void ReOpen( object? sender, EventArgs e )
         {
-            trayIcon.Visible = false;
+            managerInit.trayIcon!.Visible = false;
             Show();
 
 #if DEBUG
@@ -502,7 +554,7 @@ namespace SCB
 #endif
         }
 
-
+        [DoesNotReturn]
         protected override void OnFormClosed( FormClosedEventArgs e )
         {
 
@@ -510,15 +562,22 @@ namespace SCB
             recoilPatternCapture?.StopMonitoring();
             recoilPatternCapture?.Dispose();
 #endif
-
-            trayIcon.Visible = false;
-            trayIcon.Dispose();
+            ErrorHandler.OnStatusUpdate -= UpdateStatusBar;
+            managerInit.trayIcon!.Visible = false;
+            managerInit.trayIcon.Dispose();
             bezierForm?.Dispose();
             configurationsForm?.Dispose();
-
+            managerInit.aimbot?.Dispose();
+            managerInit.Dispose();
             Logger.CleanUp();
             base.OnFormClosed( e );
-            Application.Exit();
+            Application.Exit( new()
+            {
+                Cancel = false
+            } );
+
+            // just in case
+            Environment.Exit( 0 );
         }
 
         protected override void OnPaint( PaintEventArgs e )
@@ -536,7 +595,7 @@ namespace SCB
             }
 
             // Create a GraphicsPath to define rounded corners
-            GraphicsPath path = new GraphicsPath();
+            using GraphicsPath path = new();
             Rectangle windowRect = this.ClientRectangle;
             int radius = 15;
 
@@ -689,15 +748,26 @@ namespace SCB
             recoilPatternCapture.StartMonitoring();
             Logger.Log( "Recoil Pattern Capture Enabled" );
 #else
+            // Setup directX11 
+            managerInit.directX11 = new( ref managerInit.colorToleranceManager!, managerInit.renderDocApi! );
+
+            // start capture watch for aimbot
             Utils.Watch.StartCaptureWatch();
-            aimBot.Start();
+
+            // Start the aimbot
+            managerInit.aimbot!.Start( managerInit.directX11 );
 #endif
 #endif
         }
 
         private void materialButton2_Click( object? sender, EventArgs e )
         {
-            aimBot.Stop();
+            if ( !managerInit.aimbot!.IsRunning() )
+            {
+                return;
+            }
+
+            managerInit.aimbot!.Stop();
             Utils.Watch.StopCaptureWatch();
 #if GETRECOILPATTERN
             recoilPatternCapture!.StopMonitoring();
@@ -810,7 +880,7 @@ namespace SCB
             if ( blobFields.TryGetValue( "localAimKey", out Object? aimKeyValue ) && aimKeyValue is JsonElement aimKeyJson )
             {
                 int aimKey = aimKeyJson.GetInt32();
-                materialComboBox3.SelectedItem = aimKey.ToString();
+                materialComboBox3.SelectedItem = AimKeyValueToStr( aimKey );
                 materialComboBox3.Refresh(); // Force redraw
             }
 
@@ -823,9 +893,9 @@ namespace SCB
             }
 
             // Handle ColorTolerance (string)
-            if ( blobFields.TryGetValue( "localColorToleranceName", out Object? outlineColorValue ) && outlineColorValue is JsonElement colorToleranceJson )
+            if ( blobFields.TryGetValue( "localOutlineColor", out Object? outlineColorValue ) && outlineColorValue is JsonElement colorToleranceJson )
             {
-                string colorTolerance = colorToleranceJson.GetString();
+                string colorTolerance = colorToleranceJson.GetString()!;
                 materialComboBox1.Text = colorTolerance;
                 materialComboBox1.Refresh(); // Force redraw
             }
@@ -847,6 +917,55 @@ namespace SCB
             Invalidate(); // Redraw the form to reflect the changes
         }
 
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        private string AimKeyValueToStr( int aimKey )
+        {
+            return aimKey switch
+            {
+                MouseInput.VK_LBUTTON => "left mouse button",
+                MouseInput.VK_RBUTTON => "right mouse button",
+                MouseInput.VK_LSHIFT => "left shift",
+                MouseInput.VK_LMENU => "left alt",
+                MouseInput.VK_LCONTROL => "left control",
+                _ => "left mouse button"
+            };
+        }
 
+        private void materialButton6_Click( object sender, EventArgs e )
+        {
+            if ( !managerInit.fileManager!.CreateFullUpdateRegKey() )
+            {
+                MaterialMessageBox.Show( "Failed to create the registry key", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error );
+            } else
+            {
+                MaterialMessageBox.Show( "Registry key created successfully, Restarting PC in 5 seconds.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information );
+            }
+
+            // Restart the PC, has a 5 second delay.
+            // this uses the shutdown.exe in system32 folder
+            Process.Start( "shutdown", "/r /t 5" );
+        }
+
+
+        /// <summary>
+        /// Updates the status bar with the given text and color.
+        /// </summary>
+        private void UpdateStatusBar( string message, Color color )
+        {
+            if ( InvokeRequired )
+            {
+                Invoke( new Action( () => UpdateStatusBar( message, color ) ) );
+                return;
+            }
+
+            // Update the status bar
+            statusLabel.Text = message;
+            statusLabel.ForeColor = color;
+            statusPanel.Visible = true;
+
+            // Force the status bar to repaint
+            statusPanel.Invalidate();
+            statusPanel.Update();
+        }
     }
 }

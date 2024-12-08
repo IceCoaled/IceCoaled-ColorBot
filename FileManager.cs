@@ -30,6 +30,10 @@
 
         internal static readonly string gameSettingsFile = Path.Combine( Environment.GetFolderPath( Environment.SpecialFolder.LocalApplicationData ), @"Spectre\Saved\Config\WindowsClient\GameUserSettings.ini" );
 
+        internal static readonly string systemProfileRegistry = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile";
+
+
+
 
         /// <summary>
         /// function to download a gun recoil patterns repo if they downt exist
@@ -83,7 +87,10 @@
         }
 
 
-
+        /// <summary>
+        /// function to get the in game settings for mouse sensitivity and ads scale
+        /// </summary>
+        /// <returns>MouseSensitivity, AdsScaleFactor</returns>
         internal (float mouseSens, float adsScale) GetInGameSettings()
         {
             /*
@@ -100,7 +107,7 @@
 
             while ( true )
             {
-                line = reader.ReadLine();
+                line = reader.ReadLine()!;
 
                 if ( line == null )
                 {
@@ -113,7 +120,10 @@
                 {
                     string[] split = line.Split( '=' );
                     string value = split[ 1 ];
-                    float.TryParse( value, out float result );
+                    if ( !float.TryParse( value, out float result ) )
+                    {
+                        ErrorHandler.HandleException( new Exception( "Failed to parse MouseSensitivityADSScale" ) );
+                    }
 
 #if DEBUG
                     Logger.Log( $"MouseSensitivityADSScale: {result}" );
@@ -124,7 +134,10 @@
                 {
                     string[] split = line.Split( '=' );
                     string value = split[ 1 ];
-                    float.TryParse( value, out float result );
+                    if ( !float.TryParse( value, out float result ) )
+                    {
+                        ErrorHandler.HandleException( new Exception( "Failed to parse MouseSensitivity" ) );
+                    }
 
 #if DEBUG
                     Logger.Log( $"MouseSensitivity: {result}" );
@@ -146,17 +159,24 @@
         }
 
 
+        /// <summary>
+        /// function to get the md5 hash of a file
+        /// </summary>
+        /// <param name="fileName"> the file to hash</param>
+        /// <returns>string form of file hash</returns>
         internal string GetFileMD5Hash( string fileName )
         {
             using System.Security.Cryptography.MD5 md5 = System.Security.Cryptography.MD5.Create();
-            using ( var stream = System.IO.File.OpenRead( fileName ) )
-            {
-                var hash = md5.ComputeHash( stream );
-                return BitConverter.ToString( hash ).Replace( "-", "" );
-            }
+            using var stream = System.IO.File.OpenRead( fileName );
+            var hash = md5.ComputeHash( stream );
+            return BitConverter.ToString( hash ).Replace( "-", "" );
         }
 
 
+
+        /// <summary>
+        /// function to initialize the FileManager
+        /// </summary>
         internal void Initialize()
         {
             //create any folders that don't exist from FileManager
@@ -218,11 +238,11 @@
                 string url = "https://github.com/IceCoaled/IceCoaled-ColorBot/tree/master/recoilpatterns";
                 string path = recoilPatterns;
 
-                List<string> CurrentAddedGuns = new()
-                {
+                List<string> CurrentAddedGuns =
+                [
                     "BERSERKER RB3", "BLACKOUT", "BUZZSAW RT40", "CRUSADER",
                     "CYCLONE", "M25 HORNET", "M49 FURY", "M67 REAVER", "WHISPER"
-                };
+                ];
 
                 foreach ( string gun in CurrentAddedGuns )
                 {
@@ -258,6 +278,24 @@
 
             //get the in game settings
             GetInGameSettings();
+        }
+
+
+        internal unsafe bool CreateFullUpdateRegKey()
+        {
+            try
+            {
+                Microsoft.Win32.RegistryKey? key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey( systemProfileRegistry, true )!;
+                key ??= Microsoft.Win32.Registry.LocalMachine.CreateSubKey( systemProfileRegistry );
+
+                key.SetValue( "ForceFullScreenUpdate", 1, Microsoft.Win32.RegistryValueKind.DWord );
+                key.Close();
+                return true;
+            } catch ( Exception ex )
+            {
+                ErrorHandler.HandleException( ex );
+                return false;
+            }
         }
     }
 }

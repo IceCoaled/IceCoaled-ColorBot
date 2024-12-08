@@ -6,7 +6,7 @@ namespace SCB.Atomics
     using ASC = AtomicSupportClass;
 
 
-    public unsafe class AtomicByte( byte value ) : UnsafeAtomicNumerics<byte>( value )
+    sealed unsafe partial class AtomicByte( byte value ) : UnsafeAtomicNumerics<byte>( value )
     {
         private bool disposed = false;
         public Dictionary<ASC.AtomicOps, Func<byte, byte, byte>> UnsignedArithmeticOperations { get; set; } = ASC.ArithmeticOperations<byte>();
@@ -115,7 +115,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -132,7 +132,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -149,7 +149,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -491,7 +491,7 @@ namespace SCB.Atomics
     }
 
 
-    public unsafe class AtomicSbyte( sbyte value ) : UnsafeAtomicNumerics<sbyte>( value )
+    sealed unsafe partial class AtomicSbyte( sbyte value ) : UnsafeAtomicNumerics<sbyte>( value )
     {
         private bool disposed = false;
         public Dictionary<ASC.AtomicOps, Func<sbyte, sbyte, sbyte>> SignedArithmeticOperations { get; set; } = ASC.ArithmeticOperations<sbyte>();
@@ -600,7 +600,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -617,7 +617,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }
@@ -634,7 +634,7 @@ namespace SCB.Atomics
 
             if ( !overload )
             {
-                Write( result );
+                VALUE( result );
             }
             return result;
         }

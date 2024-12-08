@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "SCB": {
+      "commandName": "Project",
+      "nativeDebugging": true
+    }
+  }
+}

@@ -16,8 +16,6 @@ namespace SCB.Atomics
 
         void* allocHeader = null;
 
-        private GCHandle objHandle;
-
         protected ASC.AtomicStorage atomicStorage;
 
         protected Type VarType { get; set; } = typeof( T );
@@ -42,20 +40,22 @@ namespace SCB.Atomics
                 throw new NotSupportedException( "Type not supported" );
             }
 
-            // Pin our object in memory
-            objHandle = GCHandle.Alloc( this, GCHandleType.Pinned );
-
             // Setup the atomic storage
             AllocAlignedMemory();
 
-            // Set atomic value
-            atomicStorage.lAtomic = ASC.AtomiCast<long, T>( inputValue );
+            // Set atomic value to check if its properly working
+            atomicStorage.lAtomic = -6969;
 
             // Check if the atomic storage is not null
-            if ( atomicStorage.lAtomic == 0 )
+            if ( atomicStorage.lAtomic != -6969 )
             {
                 throw new InvalidOperationException( "Atomic storage is null" );
             }
+
+            // Set atomic value to all zeros first, then set the input value
+            atomicStorage.ulAtomic ^= atomicStorage.ulAtomic;
+
+            atomicStorage.lAtomic = ASC.AtomiCast<long, T>( inputValue );
         }
 
         private void AllocAlignedMemory()
@@ -183,7 +183,7 @@ namespace SCB.Atomics
 
 
         [MethodImpl( MethodImplOptions.AggressiveInlining | MethodImplOptions.Synchronized )]
-        protected void Write( T value )
+        private void Write( T value )
         {
             long lCastValue = 0;
             ulong ulCastValue = 0;
@@ -314,6 +314,33 @@ namespace SCB.Atomics
         }
 
 
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public void Unlock()
+        {
+            Monitor.Exit( highContentionSyncLock! );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public void AddReference()
+        {
+            if ( refCount == uint.MaxValue )
+            {
+                throw new InvalidOperationException( "Reference count overflow" );
+            }
+
+            Interlocked.Increment( ref refCount );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public void RemoveReference()
+        {
+            if ( Interlocked.Decrement( ref refCount ) == 0 )
+            {
+                Dispose();
+            }
+        }
+
+
         public void Dispose()
         {
             Dispose( true );
@@ -325,8 +352,7 @@ namespace SCB.Atomics
             if ( !disposed &&
                 disposing )
             {
-                // Unpin the objects from memory
-                objHandle.Free();
+                // Deallocate the memory
                 NativeMemory.AlignedFree( allocHeader );
             }
 
@@ -696,7 +722,8 @@ namespace SCB.Atomics
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool IsSupported<G>()
         {
-            return typeof( G ) == typeof( byte )
+            return typeof( G ) == typeof( bool )
+            || typeof( G ) == typeof( byte )
             || typeof( G ) == typeof( short )
             || typeof( G ) == typeof( int )
             || typeof( G ) == typeof( long )
@@ -726,6 +753,10 @@ namespace SCB.Atomics
         }
 
 
+
+        /// <summary>
+        /// Safe cast using boxing and unboxing.
+        /// </summary>
         public static T AtomiCast<T>( object? value )
         {
             if ( value is T t )
@@ -818,8 +849,8 @@ namespace SCB.Atomics
         {
             return new Dictionary<AtomicOps, Func<bool, bool, bool>>()
             {
-                { AtomicOps.And, (atomicValue, inputValue) => atomicValue & inputValue },
-                { AtomicOps.Or, (atomicValue, inputValue) => atomicValue | inputValue },
+                { AtomicOps.And, (atomicValue, inputValue) => atomicValue && inputValue },
+                { AtomicOps.Or, (atomicValue, inputValue) => atomicValue || inputValue },
                 { AtomicOps.Xor, (atomicValue, inputValue) => atomicValue ^ inputValue },
                 { AtomicOps.Not, (atomicValue, _) => !atomicValue }
             };
@@ -942,9 +973,9 @@ namespace SCB.Atomics
         {
             return new Dictionary<AtomicOps, Func<ushort, int, ushort>>()
             {
-                { AtomicOps.And, (atomicValue, inputValue) => ( ushort ) (  atomicValue & 0x7FFF  & inputValue ) },
-                { AtomicOps.Or, (atomicValue, inputValue) => ( ushort ) (  atomicValue & 0x7FFF  | inputValue ) },
-                { AtomicOps.Xor, (atomicValue, inputValue) => ( ushort ) (  atomicValue & 0x7FFF  ^ inputValue ) },
+                { AtomicOps.And, (atomicValue, inputValue) => ( ushort ) (  atomicValue & 0xFFFF  & inputValue ) },
+                { AtomicOps.Or, (atomicValue, inputValue) => ( ushort ) (  atomicValue & 0xFFFF  | inputValue ) },
+                { AtomicOps.Xor, (atomicValue, inputValue) => ( ushort ) (  atomicValue & 0xFFFF  ^ inputValue ) },
                 { AtomicOps.Not, (atomicValue, _) => ( ushort )  ~( atomicValue & 0x7FFF )  }
             };
         }
@@ -953,10 +984,10 @@ namespace SCB.Atomics
         {
             return new Dictionary<AtomicOps, Func<short, int, short>>()
             {
-                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( short ) ( ( atomicValue & 0xFFFF ) << inputValue ) },
-                { AtomicOps.RightShift, (atomicValue, inputValue) => ( short ) ( ( atomicValue & 0xFFFF ) >> inputValue ) },
-                { AtomicOps.RotateLeft, (atomicValue, inputValue) => ( short ) (  ( atomicValue & 0xFFFF ) << inputValue  |  ( atomicValue & 0x7FFF ) >>  16 - inputValue   ) },
-                { AtomicOps.RotateRight, (atomicValue, inputValue) => ( short ) (  ( atomicValue & 0xFFFF ) >> inputValue  |  ( atomicValue & 0x7FFF ) <<  16 - inputValue   ) }
+                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( short ) ( ( atomicValue & 0x7FFF ) << inputValue ) },
+                { AtomicOps.RightShift, (atomicValue, inputValue) => ( short ) ( ( atomicValue & 0x7FFF ) >> inputValue ) },
+                { AtomicOps.RotateLeft, (atomicValue, inputValue) => ( short ) (  ( atomicValue & 0x7FFF ) << inputValue  |  ( atomicValue & 0x7FFF ) >>  16 - inputValue   ) },
+                { AtomicOps.RotateRight, (atomicValue, inputValue) => ( short ) (  ( atomicValue & 0x7FFF ) >> inputValue  |  ( atomicValue & 0x7FFF ) <<  16 - inputValue   ) }
             };
         }
 
@@ -964,10 +995,10 @@ namespace SCB.Atomics
         {
             return new Dictionary<AtomicOps, Func<ushort, int, ushort>>()
             {
-                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( ushort ) ( ( atomicValue & 0x7FFF ) << inputValue ) },
-                { AtomicOps.RightShift, (atomicValue, inputValue) => ( ushort ) ( ( atomicValue & 0x7FFF ) >> inputValue ) },
-                { AtomicOps.RotateLeft, (atomicValue, inputValue) => ( ushort ) (  ( atomicValue & 0x7FFF ) << inputValue  |  ( atomicValue & 0x7FFF ) >>  16 - inputValue   ) },
-                { AtomicOps.RotateRight, (atomicValue, inputValue) => ( ushort ) (  ( atomicValue & 0x7FFF ) >> inputValue  |  ( atomicValue & 0x7FFF ) <<  16 - inputValue   ) }
+                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( ushort ) ( ( atomicValue & 0xFFFF ) << inputValue ) },
+                { AtomicOps.RightShift, (atomicValue, inputValue) => ( ushort ) ( ( atomicValue & 0xFFFF ) >> inputValue ) },
+                { AtomicOps.RotateLeft, (atomicValue, inputValue) => ( ushort ) (  ( atomicValue & 0xFFFF ) << inputValue  |  ( atomicValue & 0xFFFF ) >>  16 - inputValue   ) },
+                { AtomicOps.RotateRight, (atomicValue, inputValue) => ( ushort ) (  ( atomicValue & 0xFFFF ) >> inputValue  |  ( atomicValue & 0xFFFF ) <<  16 - inputValue   ) }
             };
         }
 
@@ -975,9 +1006,9 @@ namespace SCB.Atomics
         {
             return new Dictionary<AtomicOps, Func<sbyte, int, sbyte>>()
             {
-                { AtomicOps.And, (atomicValue, inputValue) => ( sbyte ) (  atomicValue & 0xFF  & inputValue ) },
-                { AtomicOps.Or, (atomicValue, inputValue) => ( sbyte ) (  atomicValue & 0xFF  | inputValue ) },
-                { AtomicOps.Xor, (atomicValue, inputValue) => ( sbyte ) (  atomicValue & 0xFF  ^ inputValue ) },
+                { AtomicOps.And, (atomicValue, inputValue) => ( sbyte ) (  atomicValue & 0x7F  & inputValue ) },
+                { AtomicOps.Or, (atomicValue, inputValue) => ( sbyte ) (  atomicValue & 0x7F  | inputValue ) },
+                { AtomicOps.Xor, (atomicValue, inputValue) => ( sbyte ) (  atomicValue & 0x7F  ^ inputValue ) },
                 { AtomicOps.Not, (atomicValue, _) => ( sbyte )  ~( atomicValue & 0xFF )  }
             };
         }
@@ -986,9 +1017,9 @@ namespace SCB.Atomics
         {
             return new Dictionary<AtomicOps, Func<byte, int, byte>>()
             {
-                { AtomicOps.And, (atomicValue, inputValue) => ( byte ) (  atomicValue & 0x7F  & inputValue ) },
-                { AtomicOps.Or, (atomicValue, inputValue) => ( byte ) (  atomicValue & 0x7F  | inputValue ) },
-                { AtomicOps.Xor, (atomicValue, inputValue) => ( byte ) (  atomicValue & 0x7F  ^ inputValue ) },
+                { AtomicOps.And, (atomicValue, inputValue) => ( byte ) (  atomicValue & 0xFF  & inputValue ) },
+                { AtomicOps.Or, (atomicValue, inputValue) => ( byte ) (  atomicValue & 0xFF  | inputValue ) },
+                { AtomicOps.Xor, (atomicValue, inputValue) => ( byte ) (  atomicValue & 0xFF  ^ inputValue ) },
                 { AtomicOps.Not, (atomicValue, _) => ( byte )  ~( atomicValue & 0x7F )  }
             };
         }
@@ -997,10 +1028,10 @@ namespace SCB.Atomics
         {
             return new Dictionary<AtomicOps, Func<sbyte, int, sbyte>>()
             {
-                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( sbyte ) ( ( atomicValue & 0xFF ) << inputValue ) },
-                { AtomicOps.RightShift, (atomicValue, inputValue) => ( sbyte ) ( ( atomicValue & 0xFF ) >> inputValue ) },
-                { AtomicOps.RotateLeft, (atomicValue, inputValue) => ( sbyte ) (  ( atomicValue & 0xFF ) << inputValue  |  ( atomicValue & 0x7F ) >>  8 - inputValue   ) },
-                { AtomicOps.RotateRight, (atomicValue, inputValue) => ( sbyte ) (  ( atomicValue & 0xFF ) >> inputValue  |  ( atomicValue & 0x7F ) <<  8 - inputValue   ) }
+                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( sbyte ) ( ( atomicValue & 0x7F ) << inputValue ) },
+                { AtomicOps.RightShift, (atomicValue, inputValue) => ( sbyte ) ( ( atomicValue & 0x7F ) >> inputValue ) },
+                { AtomicOps.RotateLeft, (atomicValue, inputValue) => ( sbyte ) (  ( atomicValue & 0x7F ) << inputValue  |  ( atomicValue & 0x7F ) >>  8 - inputValue   ) },
+                { AtomicOps.RotateRight, (atomicValue, inputValue) => ( sbyte ) (  ( atomicValue & 0x7F ) >> inputValue  |  ( atomicValue & 0x7F ) <<  8 - inputValue   ) }
             };
         }
 
@@ -1008,10 +1039,10 @@ namespace SCB.Atomics
         {
             return new Dictionary<AtomicOps, Func<byte, int, byte>>()
             {
-                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( byte ) ( ( atomicValue & 0x7F ) << inputValue ) },
-                { AtomicOps.RightShift, (atomicValue, inputValue) => ( byte ) ( ( atomicValue & 0x7F ) >> inputValue ) },
-                { AtomicOps.RotateLeft, (atomicValue, inputValue) => ( byte ) (  ( atomicValue & 0x7F ) << inputValue  |  ( atomicValue & 0x7F ) >>  8 - inputValue   ) },
-                { AtomicOps.RotateRight, (atomicValue, inputValue) => ( byte ) (  ( atomicValue & 0x7F ) >> inputValue  |  ( atomicValue & 0x7F ) <<  8 - inputValue   ) }
+                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( byte ) ( ( atomicValue & 0xFF ) << inputValue ) },
+                { AtomicOps.RightShift, (atomicValue, inputValue) => ( byte ) ( ( atomicValue & 0xFF ) >> inputValue ) },
+                { AtomicOps.RotateLeft, (atomicValue, inputValue) => ( byte ) (  ( atomicValue & 0xFF ) << inputValue  |  ( atomicValue & 0xFF ) >>  8 - inputValue   ) },
+                { AtomicOps.RotateRight, (atomicValue, inputValue) => ( byte ) (  ( atomicValue & 0xFF ) >> inputValue  |  ( atomicValue & 0xFF ) <<  8 - inputValue   ) }
             };
         }
     }
