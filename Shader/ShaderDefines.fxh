@@ -75,7 +75,7 @@ struct HairCluster
     
     inline bool CheckForGrouping( int2 pos )
     {
-        return distance( asfloat( pos ), asfloat( averagePos ) ) > HAIR_CLUSTER_THRESHOLD ? true : false;
+        return distance( asfloat( pos ), asfloat( averagePos ) ) < HAIR_CLUSTER_THRESHOLD ? true : false;
     }
     
     inline void AddAverage( int2 pos, int currentSize )
