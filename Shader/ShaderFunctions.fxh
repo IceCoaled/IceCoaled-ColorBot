@@ -480,7 +480,7 @@ inline void BoundingBoxMergeHelper( int segmentIndex)
 #endif
     for ( int i = 0; i < MAX_PLAYERS; i++ )
     {
-        if ( segmentIndex != i && distance( asfloat( groupMin [ segmentIndex ] ), asfloat( groupMin [ i ] ) ) < BOUNDINGBOX_MERGE_THRESHOLD )
+        if ( segmentIndex != i && distance( asfloat( groupMin [ segmentIndex ] ), asfloat( groupMin [ i ] ) ) <= BOUNDINGBOX_MERGE_THRESHOLD )
         {
             int2 outMax = int2( 0, 0 );
             int2 outMin = int2( 0, 0 );
@@ -491,7 +491,7 @@ inline void BoundingBoxMergeHelper( int segmentIndex)
             
             // Remove any bounding boxes that have been merged.
             [flatten]
-            if ( all(outMax) && all(outMin) && distance( asfloat( groupMax [ i ] ), asfloat( outMax ) ) < BOUNDINGBOX_MERGE_THRESHOLD )
+            if ( all(outMax) && all(outMin) && distance( asfloat( groupMax [ i ] ), asfloat( outMax ) ) <= BOUNDINGBOX_MERGE_THRESHOLD )
             {
                 InterlockedAdd( groupMax [ i ].x, -groupMax [ i ].x, 0 );
                 InterlockedAdd( groupMax [ i ].y, -groupMax [ i ].y, 0 );
