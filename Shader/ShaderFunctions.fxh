@@ -13,6 +13,13 @@ inline bool VerifyPixel( int pixelType, int2 localPos, int2 scanOffset )
 // This will be done 2 or 3 times, this way we can connect all the outline pixels.
 inline void FindOutlineConnection( int2 localPos, int pixelType )
 {
+    // Reset the fill modified flag.
+    if ( localPos == 0 )
+    {
+        fillModified = true;
+    }
+    
+    // Connect the outline pixels.
     while ( fillModified )
     {
         bool2 fillCurrentPos = false;
@@ -114,6 +121,13 @@ inline void RemoveNonSkin( int2 localPos, int pixelType )
 // Flood fill the body of the character.
 inline void FloodFillBody( int2 localPos, int pixelType )
 {
+    // Reset the fill modified flag.
+    if ( localPos == 0 )
+    {
+        fillModified = true;
+    }
+    
+    // Fill the body of the character.
     while ( fillModified )
     {
         bool isBody = false;
@@ -312,7 +326,7 @@ inline void MergeHairClusters( int clusterCount, int2 localId )
 {
     bool oddClusters = clusterCount % 2;
     
-    if ( clusterCount > 2 && localId < ( clusterCount >> 1 ) )
+    if ( clusterCount > 2 && localId <= ( clusterCount >> 1 ) )
     {
         if ( distance( asfloat( hairClusters [ localId.x ].GetAveragePos() ), asfloat( hairClusters [ PARALLEL_POS_CALC( localId, clusterCount ) ].GetAveragePos() ) < HAIR_CLUSTER_THRESHOLD ) )
         {
@@ -421,12 +435,13 @@ inline int CheckAndSetPixel( int2 localPos, float4 pixelColor, half3 rangeName, 
 // Each time a thread finds a filled pixel it will reduce the bounding box.
 inline void BoundingBoxReductionHelper( int2 localPos, int segmentIndex )
 {
+    [flatten]
     if ( localSharedMatrix [ localPos.x ] [ localPos.y ] == PX_FLOODFILL )
     {
-        InterlockedMax( groupMax [ segmentIndex ].x, localPos.x, groupMax [ segmentIndex ].x );
-        InterlockedMax( groupMax [ segmentIndex ].y, localPos.y, groupMax [ segmentIndex ].y );
-        InterlockedMin( groupMin [ segmentIndex ].x, localPos.x, groupMin [ segmentIndex ].x );
-        InterlockedMin( groupMin [ segmentIndex ].y, localPos.y, groupMin [ segmentIndex ].y );
+        InterlockedMax( groupMax [ segmentIndex ].x, localPos.x);
+        InterlockedMax( groupMax [ segmentIndex ].y, localPos.y);
+        InterlockedMin( groupMin [ segmentIndex ].x, localPos.x);
+        InterlockedMin( groupMin [ segmentIndex ].y, localPos.y);
     }
 }
 
@@ -436,7 +451,8 @@ inline void BoundingBoxReductionHelper( int2 localPos, int segmentIndex )
 inline void GetBoundingBoxPositions( int2 localPos )
 {
     // this way is faster than using a loop with 1 thread.
-    if ( localPos < SEGMENT_SIZE )
+    [flatten]
+    if ( localPos <= MAX_PLAYERS)
     {
         // Set the group min/max be the size of the texture, this is much larger than the actual bounding box.
         // This way we can reduce the bounding box to the actual size.
@@ -453,25 +469,115 @@ inline void GetBoundingBoxPositions( int2 localPos )
     GroupMemoryBarrierWithGroupSync();
 }
 
-inline void SetPlayerBoundingBoxs( int2 localPos, int clusterCount, int2 globalPos )
+
+// This will merge the bounding boxes of the segments that are within the threshold of each other.
+inline void BoundingBoxMergeHelper( int segmentIndex)
 {
-    bool avgPixel = false;
-    // Get the bounding box positions that contain the hair clusters.    
-    if ( SEGMENT_CALC( localPos ) == hairClusters [ SEGMENT_CALC( localPos ) ].GetClusterId() ||
-        SEGMENT_CALC( localPos ) == hairClusters [ SEGMENT_CALC( localPos ) ].GetClusterId() * 2 )
+#ifdef DEBUG
+    [loop]
+#else
+    [unroll]
+#endif
+    for ( int i = 0; i < MAX_PLAYERS; i++ )
     {
-        avgPixel = localPos == hairClusters [ SEGMENT_CALC( localPos ) ].GetAveragePos();     
+        if ( segmentIndex != i && distance( asfloat( groupMin [ segmentIndex ] ), asfloat( groupMin [ i ] ) ) < BOUNDINGBOX_MERGE_THRESHOLD )
+        {
+            int2 outMax = int2( 0, 0 );
+            int2 outMin = int2( 0, 0 );
+            InterlockedMax( groupMax [ segmentIndex ].x, groupMax [ i ].x, outMax.x );
+            InterlockedMax( groupMax [ segmentIndex ].y, groupMax [ i ].y, outMax.y );
+            InterlockedMin( groupMin [ segmentIndex ].x, groupMin [ i ].x, outMin.x );
+            InterlockedAdd( groupMin [ segmentIndex ].y, groupMin [ i ].y, outMin.y );
+            
+            // Remove any bounding boxes that have been merged.
+            [flatten]
+            if ( all(outMax) && all(outMin) && distance( asfloat( groupMax [ i ] ), asfloat( outMax ) ) < BOUNDINGBOX_MERGE_THRESHOLD )
+            {
+                InterlockedAdd( groupMax [ i ].x, -groupMax [ i ].x, 0 );
+                InterlockedAdd( groupMax [ i ].y, -groupMax [ i ].y, 0 );
+                InterlockedAdd( groupMin [ i ].x, -groupMin [ i ].x, 0 );
+                InterlockedAdd( groupMin [ i ].y, -groupMin [ i ].y, 0 );
+            }
+        }
+    }
+}
+
+// This will merge the potential 6 bounding boxes into 1 bounding box.
+// Get the locations of the average hair position(s).
+// Add the details to the group details buffer.
+inline void SetGroupDetails( int2 localPos, int groupId, int2 globalPos )
+{
+    int2 averageHairPos = int2( 0, 0 );
+    int2 gMin = int2( 0, 0 );
+    int2 gMax = int2( 0, 0 );
+    int segmentId = SEGMENT_CALC( localPos );
+    
+    // Get hair cluster details.
+    [flatten]
+    if ( localPos >= hairClusterCount )
+    {
+        averageHairPos = hairClusters [ localPos.x ].GetAveragePos();
     }
     
-    // Sync the threads
-    GroupMemoryBarrierWithGroupSync();  
+    // Join any of the bounding boxes from each segment, if they are within the threshold.   
+    BoundingBoxMergeHelper( segmentId );
     
-    // Join any bounding boxes that are around the current target into one bounding box.
-    // We know where the head is, and we got the info to know if the current pixel is the average pixel of the hair cluster.
+    // Sync the threads in the group, this way they all see the initialized values.
+    GroupMemoryBarrierWithGroupSync();
     
+    // Run the bounding box merge again, just in case we missed any.
+    BoundingBoxMergeHelper( segmentId );
     
-   
+    GroupMemoryBarrierWithGroupSync();
+    
+    if ( averageHairPos != 0 )
+    {
+        // If the average hair position is within the threshold of the bounding box we keep it.
+        averageHairPos = clamp( distance( asfloat( averageHairPos ), asfloat( groupMin [ segmentId ] ) ), 0, HAIR_TO_BOUNDINGBOX_THRESHOLD ) == averageHairPos ? averageHairPos : 0;
+        
+        // if this hair cluster is the one that matches the bounding box, set the min/max for the bounding box.
+        [branch]
+        if ( averageHairPos != 0 )
+        {
+            gMin = groupMin [ segmentId ];
+            gMax = groupMax [ segmentId ];
+        }
+    }
+    
+    // Set the group details.
+    [branch]
+    if ( all( gMin ) && all( gMax ) && all( averageHairPos ) )
+    {
+        GroupDetailsBuffer [ groupId ].SetGroupMinMax( gMin, gMax, segmentId );
+        GroupDetailsBuffer [ groupId ].SetHairClusterPos( averageHairPos, segmentId );
+    } 
+
+    // Sync everything.
+    // This is because we are writing to a unordered access buffer.
+    DeviceMemoryBarrier();
 }
+
+
+
+// Look at the local matrix and get the details for the global matrix.
+// The swap color input will only be valid if the pixel type is hair, outline or skin.
+// Otherwise the flood fill and background colors are global.
+inline void GetAndSetDetailsForGlobal(int2 localPos, int2 globalPos , float4 swapColor)
+{
+    [branch]
+    if (any(swapColor))
+    {
+        UavBuffer [ globalPos ] = swapColor;
+    }
+    else
+    {
+        UavBuffer [ globalPos ] = localSharedMatrix [ localPos.x ] [ localPos.y ] == PX_FLOODFILL ? OBJECT_FILL_COLOR : BACKGROUND_PIXEL_COLOR;
+    }
+    
+    // Sync everything.
+    DeviceMemoryBarrier();
+}
+
 
 
 
