@@ -44,7 +44,8 @@ inline void FindOutlineConnection( int2 localPos, int pixelType )
     {
         bool2 fillCurrentPos = false;
         
-        for ( int i = 0; i < 4; i++ )
+        // Search for a line of the outline color in any direction.
+        for ( int i = 0; i < 4; i += 2 )
         {
             fillCurrentPos.x = VerifyPixel( pixelType, localPos, scanMatrix [ i ] [ 0 ] ) && VerifyPixel( pixelType, localPos, scanMatrix [ i ] [ 1 ] ) && VerifyPixel( pixelType, localPos, scanMatrix [ i ] [ 2 ] );
             fillCurrentPos.y = VerifyPixel( pixelType, localPos, scanMatrix [ i + 1 ] [ 0 ] ) && VerifyPixel( pixelType, localPos, scanMatrix [ i + 1 ] [ 1 ] ) && VerifyPixel( pixelType, localPos, scanMatrix [ i + 1 ] [ 2 ] );
@@ -55,7 +56,7 @@ inline void FindOutlineConnection( int2 localPos, int pixelType )
             }
         }
         
-        // Check if there is a line of the outline color in any direction.
+        // redundant check, but it is needed.
         if ( fillCurrentPos.x | fillCurrentPos.y )
         {
                 // If there is a line in any direction, fill the current position.
