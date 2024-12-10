@@ -5,7 +5,7 @@
 // Check if the current pixel is the same as the pixel type.
 inline bool VerifyPixel( int pixelType, int2 localPos, int2 scanOffset )
 {
-    return all( pixelType - localSharedMatrix [ localPos.x + scanOffset.x ] [ localPos.y + scanOffset.y ] ) ? false : true;
+    return pixelType == localSharedMatrix [ localPos.x + scanOffset.x ] [ localPos.y + scanOffset.y ]  ? true : false;
 }
 
 

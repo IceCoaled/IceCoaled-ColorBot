@@ -52,9 +52,9 @@ typedef matrix<int, 2, 6> GroupDetailsAvgHairPos;
 
 ///----------Color-Names-----------///
 // Edit these while we edit the other constants
-#define COLOR_NAME_OUTLNZ half3{ 0, 0, 0 };
-#define COLOR_NAME_HAIR half3{ 0, 0, 0 };
-#define COLOR_NAME_SKIN half3{ 0, 0, 0 };
+#define COLOR_NAME_OUTLNZ half3( 0, 0, 0 )
+#define COLOR_NAME_HAIR half3( 0, 0, 0 )
+#define COLOR_NAME_SKIN half3( 0, 0, 0 )
 // Add more names here
 
 ///----------Structs-----------///
@@ -361,8 +361,8 @@ groupshared int hairClusterCount = 0;
 // Pixel types
 // We use these for the local matrix instead of actual pixel colors.
 // This is to reduce the computation time.
-#define PX_OUTLINE ( 1 << 1 );
-#define PX_HAIR ( 1 << 2 );
-#define PX_SKIN ( 1 << 3 );
-#define PX_FLOODFILL ( 1 << 4 );
-#define PX_BACKGROUND ( 1 << 5 );
+#define PX_OUTLINE ( ( int ) ( 1 << 1 ) )
+#define PX_HAIR ( ( int ) ( 1 << 2 ) )
+#define PX_SKIN ( ( int ) ( 1 << 3 ) )
+#define PX_FLOODFILL ( ( int ) ( 1 << 4 ) )
+#define PX_BACKGROUND ( ( int ) ( 1 << 5 ) )
