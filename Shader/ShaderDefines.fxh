@@ -43,25 +43,23 @@ typedef matrix<int, 2, 6> GroupDetailsAvgHairPos;
 #define MAX_INT ( ( int ) 0x7FFFFFFF )
 
 ///----------Return-Codes-----------///
-
-#define NO_RANGE_ERROR ( (int ) -0xB00B5 )
-#define ALIGNMENT_ERROR ( (int ) -0x6969 )
-#define SET_BACKGROUND ( (int  )0x0A55 )
-#define SET_OUTLINE ( (int ) 0 )
-#define SET_HAIR ( (int ) 1 )
-#define SET_SKIN ( (int ) 2 )
+#define NO_RANGE_ERROR ( ( int ) -0xB00B5 )
+#define ALIGNMENT_ERROR ( ( int ) -0x6969 )
+#define SET_BACKGROUND ( ( int  )0x0A55 )
+#define SET_OUTLINE ( ( int ) 0 )
+#define SET_HAIR ( ( int ) 1 )
+#define SET_SKIN ( ( int ) 2 )
 
 ///----------Color-Names-----------///
 // Edit these while we edit the other constants
-static const half3 COLOR_NAME_OUTLNZ = { 0, 0, 0 };
-static const half3 COLOR_NAME_HAIR = { 0, 0, 0 };
-static const half3 COLOR_NAME_SKIN = { 0, 0, 0 };
+#define COLOR_NAME_OUTLNZ half3{ 0, 0, 0 };
+#define COLOR_NAME_HAIR half3{ 0, 0, 0 };
+#define COLOR_NAME_SKIN half3{ 0, 0, 0 };
 // Add more names here
 
 ///----------Structs-----------///
 
 // Hair cluster struct
-
 // Hair cluster threshold
 // if a new hair pixel is outside this threshold, it will be considered a new cluster.
 #define HAIR_CLUSTER_THRESHOLD ( ( int ) 0xD )
@@ -102,16 +100,8 @@ struct HairCluster
         return positions [ index ];
     }
     
-    inline void SetClusterId( int seed )
+    inline void SetClusterId( int id )
     {
-        int id = 0x3E1A;
-        for ( int i = 8; i < 8; i++ )
-        {
-            id = id * ( seed + i );
-            id ^= id >> 16;
-            seed = ( seed << 5 ) ^ id ^ ( seed >> 3 );
-        }
-        
         InterlockedCompareExchange( clusterId, 0, id, 0 );
     }
     
@@ -223,6 +213,25 @@ struct DetectedPlayers
     PlayerPosition players [ MAX_PLAYERS ];
     int playerCount;
     int safetyCheck; // Debugging purposes, we can use this here as well.
+    
+    inline void AddPlayerPos( int2 headPos, int2 bodyPos, uint4 boundingBox )
+    {
+        int currentCount = 0;
+        InterlockedAdd( playerCount, 1, currentCount + 1 );
+        InterlockedCompareExchange( players [ currentCount ].headPosition.x, 0, headPos.x, 0 );
+        InterlockedCompareExchange( players [ currentCount ].headPosition.y, 0, headPos.y, 0 );
+        InterlockedCompareExchange( players [ currentCount ].bodyPosition.x, 0, bodyPos.x, 0 );
+        InterlockedCompareExchange( players [ currentCount ].bodyPosition.y, 0, bodyPos.y, 0 );
+        InterlockedCompareExchange( players [ currentCount ].boundingBox.x, 0, boundingBox.x, 0 );
+        InterlockedCompareExchange( players [ currentCount ].boundingBox.y, 0, boundingBox.y, 0 );
+        InterlockedCompareExchange( players [ currentCount ].boundingBox.z, 0, boundingBox.z, 0 );
+        InterlockedCompareExchange( players [ currentCount ].boundingBox.w, 0, boundingBox.w, 0 );
+    }
+    
+    inline bool CheckAlignment()
+    {
+        return safetyCheck == MAX_INT;
+    }
 };
 
 // GroupBoundingBoxDetails struct.
@@ -232,6 +241,7 @@ struct GroupDetails
     GroupDetailsMin groupMin;
     GroupDetailsMax groupMax;
     GroupDetailsAvgHairPos avgHairPos;
+    int safetyCheck; // Debugging purposes, we can use this here as well.
     
     // Set all detail
     inline void SetGroupDetails( int2 min[], int2 max[], int2 avgHairPos[], int detailCount )
@@ -280,6 +290,11 @@ struct GroupDetails
     {
         return avgHairPos;
     }
+    
+    inline bool CheckAlignment()
+    {
+        return safetyCheck == MAX_INT;
+    }
 };
 
 ///----------Buffers-----------///
@@ -324,27 +339,30 @@ groupshared int2 groupMax [ MAX_PLAYERS ];
 groupshared HairCluster hairClusters [ MAX_PLAYERS << 2 ];
 groupshared int hairClusterCount = 0;
 
+// Calculates the parallel position in the top half of the array with 0 based index.
 #define PARALLEL_POS_CALC(localPos, arrayCount) ( ( int ) ( ( arrayCount >> 1 ) + ( localPos + 1 ) ) )
-
-// Neighbourhood matrix offsets
-// This is a 3x3 matrix, with the center pixel being the current pixel.
-static const int2 ScanOffsets [ 8 ] =
-{
-    int2( -1, -1 ), int2( 0, -1 ), int2( 1, -1 ),
-    int2( -1, 0 ), int2( 1, 0 ),
-    int2( -1, 1 ), int2( 0, 1 ), int2( 1, 1 )
-};
 
 // Calculate the current segment
 // This goes down to the nearest segment size
 // Then sets the current segment to a segment index with 0 based index.
-#define SEGMENT_CALC( localPos ) ( (int) ( ( ( ( int ) localPos.x ) + SEGMENT_SIZE ) & ~( SEGMENT_SIZE - 1 ) ) / ( SEGMENT_SIZE - 1 ) )
+#define SEGMENT_CALC( localPos ) ( ( int ) ( ( ( ( int ) localPos.x ) + SEGMENT_SIZE ) & ~( SEGMENT_SIZE - 1 ) ) / ( SEGMENT_SIZE - 1 ) )
+
+// neighborhood scan
+// We are using a 3x3 neighborhood scan
+#define SCAN_TOP_LEFT int2( -1, -1 )
+#define SCAN_TOP int2( 0, -1 )
+#define SCAN_TOP_RIGHT int2( 1, -1 )
+#define SCAN_LEFT int2( -1, 0 )
+#define SCAN_RIGHT int2( 1, 0 )
+#define SCAN_BOTTOM_LEFT int2( -1, 1 )
+#define SCAN_BOTTOM int2( 0, 1 )
+#define SCAN_BOTTOM_RIGHT int2( 1, 1 )
 
 // Pixel types
 // We use these for the local matrix instead of actual pixel colors.
 // This is to reduce the computation time.
-static const int PX_OUTLINE = ( 1 << 1 );
-static const int PX_HAIR = ( 1 << 2 );
-static const int PX_SKIN = ( 1 << 3 );
-static const int PX_FLOODFILL = ( 1 << 4 );
-static const int PX_BACKGROUND = ( 1 << 5 );
+#define PX_OUTLINE ( 1 << 1 );
+#define PX_HAIR ( 1 << 2 );
+#define PX_SKIN ( 1 << 3 );
+#define PX_FLOODFILL ( 1 << 4 );
+#define PX_BACKGROUND ( 1 << 5 );

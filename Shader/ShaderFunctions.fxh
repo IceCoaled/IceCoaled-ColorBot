@@ -2,7 +2,7 @@
 ///----------Functions-----------///
 
 
-// Check if the pixel is an outline pixel.
+// Check if the current pixel is the same as the pixel type.
 inline bool VerifyPixel( int pixelType, int2 localPos, int2 scanOffset )
 {
     return all( pixelType - localSharedMatrix [ localPos.x + scanOffset.x ] [ localPos.y + scanOffset.y ] ) ? false : true;
@@ -13,114 +13,123 @@ inline bool VerifyPixel( int pixelType, int2 localPos, int2 scanOffset )
 // This will be done 2 or 3 times, this way we can connect all the outline pixels.
 inline void FindOutlineConnection( int2 localPos, int pixelType )
 {
+    // if the current pixel is already an outline pixel, return.
+    if ( VerifyPixel( PX_OUTLINE, localPos, 0 ) )
+    {
+        return;
+    }
+    
     // Reset the fill modified flag.
     if ( localPos == 0 )
     {
         fillModified = true;
     }
     
+    static const int2 scanMatrix [ 8 ] [ 3 ] = 
+    { 
+        { SCAN_TOP_LEFT, SCAN_TOP, SCAN_TOP_RIGHT }, 
+        { SCAN_TOP_RIGHT, SCAN_RIGHT, SCAN_BOTTOM_RIGHT }, 
+        { SCAN_TOP, SCAN_TOP_RIGHT, SCAN_RIGHT }, 
+        { SCAN_BOTTOM_LEFT, SCAN_LEFT, SCAN_TOP_LEFT }, 
+        { SCAN_BOTTOM_LEFT, SCAN_BOTTOM, SCAN_BOTTOM_RIGHT }, 
+        { SCAN_BOTTOM, SCAN_LEFT, SCAN_TOP_LEFT }, 
+        { SCAN_BOTTOM, SCAN_RIGHT, SCAN_TOP_RIGHT }, 
+        { SCAN_TOP, SCAN_LEFT, SCAN_BOTTOM_LEFT } 
+    };
+
+    
+    
     // Connect the outline pixels.
     while ( fillModified )
     {
         bool2 fillCurrentPos = false;
-
-        // Check if there is a line of the outline color in any direction.
-        [forcecase]
-        switch ( true )
+        
+        for ( int i = 0; i < 4; i++ )
         {
-            case 0:
-                fillCurrentPos.x = VerifyPixel( pixelType, localPos, ScanOffsets [ 0 ] );
-                fillCurrentPos.y = VerifyPixel( pixelType, localPos, ScanOffsets [ 7 ] );
-                break;
-            case 1:
-                if ( !fillCurrentPos.x || !fillCurrentPos.y )
-                {
-                    fillCurrentPos.x = VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] );
-                    fillCurrentPos.y = VerifyPixel( pixelType, localPos, ScanOffsets [ 6 ] );
-                }
-                break;
-            case 2:
-                if ( !fillCurrentPos.x || !fillCurrentPos.y )
-                {
-                    fillCurrentPos.x = VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] );
-                    fillCurrentPos.y = VerifyPixel( pixelType, localPos, ScanOffsets [ 5 ] );
-                }
-                break;
-            case 3:
-                if ( !fillCurrentPos.x || !fillCurrentPos.y )
-                {
-                    fillCurrentPos.x = VerifyPixel( pixelType, localPos, ScanOffsets [ 3 ] );
-                    fillCurrentPos.y = VerifyPixel( pixelType, localPos, ScanOffsets [ 4 ] );
-                }
-                break;
-            default:
-                return;
-        }
-      
-       
-        if ( fillCurrentPos.x || fillCurrentPos.y )
-        {
-            // If there is a line in any direction, fill the current position.
-            localSharedMatrix [ localPos.x ] [ localPos.y ] = PX_OUTLINE;
+            fillCurrentPos.x = VerifyPixel( pixelType, localPos, scanMatrix [ i ] [ 0 ] ) && VerifyPixel( pixelType, localPos, scanMatrix [ i ] [ 1 ] ) && VerifyPixel( pixelType, localPos, scanMatrix [ i ] [ 2 ] );
+            fillCurrentPos.y = VerifyPixel( pixelType, localPos, scanMatrix [ i + 1 ] [ 0 ] ) && VerifyPixel( pixelType, localPos, scanMatrix [ i + 1 ] [ 1 ] ) && VerifyPixel( pixelType, localPos, scanMatrix [ i + 1 ] [ 2 ] );
             
-            // Set the fill modified flag.
+            if ( fillCurrentPos.x | fillCurrentPos.y )
+            {
+                break;
+            }
+        }
+        
+        // Check if there is a line of the outline color in any direction.
+        if ( fillCurrentPos.x | fillCurrentPos.y )
+        {
+                // If there is a line in any direction, fill the current position.
+            localSharedMatrix [ localPos.x ] [ localPos.y ] = PX_OUTLINE;
+                
+                // Set the fill modified flag.
             InterlockedCompareExchange( fillModified, false, true, 0 );
         }
         else
         {
-            // Set the fill modified flag to false.
-            InterlockedCompareExchange( fillModified, true, false, 0 );
+            InterlockedExchange( fillModified, false, 0 );
         }
         
-        // Sync the threads in the group, this way they alll see the initialized values.
-        // this sync the mofiied flag as well before the next iteration.
+        // Sync the threads in the group.
         GroupMemoryBarrierWithGroupSync();
     }
 }
 
 
-inline void RemoveNonSkin( int2 localPos, int pixelType )
-{
-    bool isSkin = false;
+
+//// Currently not used.
+//// Needs to be updated if used.
+//inline void RemoveNonSkin( int2 localPos, int pixelType )
+//{
+//    bool isSkin = false;
     
-    [forcecase]
-    switch ( true )
-    {
-        case 0:
-            isSkin = VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 4 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 8 ] );
-            break;
-        case 1:
-            if ( !isSkin )
-            {
-                isSkin = VerifyPixel( pixelType, localPos, ScanOffsets [ 0 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 3 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 5 ] );
-            }
-            break;
-        case 2:
-            if ( !isSkin )
-            {
-                isSkin = VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 4 ] );
-            }
-        case 3:
-            if ( !isSkin )
-            {
-                isSkin = VerifyPixel( pixelType, localPos, ScanOffsets [ 5 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 3 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] );
-            }
-            break;
-        default:
-            return;
-    }
+//    // Check if the pixel is colored as skin but is not skin.
+//    isSkin = VerifyPixel( pixelType, localPos, ScanOffsets [ 0 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] );
     
-    if ( !isSkin )
-    {
-        localSharedMatrix [ localPos.x ] [ localPos.y ] = PX_BACKGROUND;
-    }
-}
+//    isSkin = isSkin ? isSkin : VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 4 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 7 ] );
+    
+//    isSkin = isSkin ? isSkin : VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 4 ] );
+    
+//    isSkin = isSkin ? isSkin : VerifyPixel( pixelType, localPos, ScanOffsets [ 5 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 3 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] );
+       
+//    if ( !isSkin )
+//    {
+//        localSharedMatrix [ localPos.x ] [ localPos.y ] = PX_BACKGROUND;
+//    }
+//}
 
 
 
 // Flood fill the body of the character.
 inline void FloodFillBody( int2 localPos, int pixelType )
 {
+         
+    // If the current pixel is hair or outline, return.
+    if ( VerifyPixel( PX_HAIR, localPos, 0 ) || VerifyPixel( PX_OUTLINE, localPos, 0 ) )
+    {
+        return;
+    }
+    
+    
+    static const int2 fillMatrix1 [ 7 ] [ 3 ] =
+    { 
+        { SCAN_TOP_LEFT, SCAN_TOP, SCAN_TOP_RIGHT }, 
+        { SCAN_TOP_RIGHT, SCAN_RIGHT, SCAN_BOTTOM_RIGHT }, 
+        { SCAN_TOP, SCAN_TOP_RIGHT, SCAN_RIGHT }, 
+        { SCAN_BOTTOM_LEFT, SCAN_LEFT, SCAN_TOP }, 
+        { SCAN_BOTTOM_LEFT, SCAN_BOTTOM, SCAN_BOTTOM_RIGHT }, 
+        { SCAN_BOTTOM, SCAN_LEFT, SCAN_TOP_LEFT }, 
+        { SCAN_BOTTOM, SCAN_RIGHT, SCAN_TOP_RIGHT } 
+    };
+    
+    static const int2 fillMatrix2 [ 5 ] [ 2 ] =
+    {
+        { SCAN_TOP_LEFT, SCAN_TOP },
+        { SCAN_TOP_RIGHT, SCAN_RIGHT },
+        { SCAN_BOTTOM_RIGHT, SCAN_BOTTOM },
+        { SCAN_BOTTOM_LEFT, SCAN_LEFT },
+        { SCAN_TOP_LEFT, SCAN_RIGHT }
+    };
+    
     // Reset the fill modified flag.
     if ( localPos == 0 )
     {
@@ -131,95 +140,30 @@ inline void FloodFillBody( int2 localPos, int pixelType )
     while ( fillModified )
     {
         bool isBody = false;
-    
-        [forcecase]
-        switch ( true )
+        
+        for ( int i = 0; i < 7; i++ )
         {
-            case 0:
-                isBody = VerifyPixel( pixelType, localPos, ScanOffsets [ 0 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] );
+            // Check if the pixel is a body pixel.
+            isBody = VerifyPixel( pixelType, localPos, fillMatrix1 [ i ] [ 0 ] ) && VerifyPixel( pixelType, localPos, fillMatrix1 [ i ] [ 1 ] ) && VerifyPixel( pixelType, localPos, fillMatrix1 [ i ] [ 2 ] );
+            
+            if ( isBody )
+            {
                 break;
-            case 1:
-                if ( !isBody )
+            }
+            
+            // This checks if we are next to other body pixels, if we are we are a body pixel.
+            if ( i < 5 )
+            {
+                isBody = VerifyPixel( PX_FLOODFILL, localPos, fillMatrix2 [ i ] [ 0 ] ) && VerifyPixel( PX_FLOODFILL, localPos, fillMatrix2 [ i ] [ 1 ] );
+                
+                if ( isBody )
                 {
-                    isBody = VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 4 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 7 ] );
+                    break;
                 }
-                break;
-            case 2:
-                if ( !isBody )
-                {
-                    isBody = VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 4 ] );
-                }
-                break;
-            case 3:
-                if ( !isBody )
-                {
-                    isBody = VerifyPixel( pixelType, localPos, ScanOffsets [ 5 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 3 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] );
-                }
-                break;
-            case 4:
-                if ( !isBody )
-                {
-                    isBody = VerifyPixel( pixelType, localPos, ScanOffsets [ 5 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 6 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 7 ] );
-                }
-                break;
-            case 5:
-                if ( !isBody )
-                {
-                    isBody = VerifyPixel( pixelType, localPos, ScanOffsets [ 6 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 3 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 0 ] );
-                }
-                break;
-            case 6:
-                if ( !isBody )
-                {
-                    isBody = VerifyPixel( pixelType, localPos, ScanOffsets [ 6 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 4 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] );
-                }
-                break;
-            case 7:
-                if ( !isBody )
-                {
-                    isBody = VerifyPixel( PX_FLOODFILL, localPos, ScanOffsets [ 0 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] );
-                }
-                break;
-            case 8:
-                if ( !isBody )
-                {
-                    isBody = VerifyPixel( PX_FLOODFILL, localPos, ScanOffsets [ 5 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 0 ] );
-                }
-                break;
-            case 9:
-                if ( !isBody )
-                {
-                    isBody = VerifyPixel( PX_FLOODFILL, localPos, ScanOffsets [ 2 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 7 ] );
-                }
-                break;
-            case 10:
-                if ( !isBody )
-                {
-                    isBody = VerifyPixel( PX_FLOODFILL, localPos, ScanOffsets [ 0 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 7 ] );
-                }
-                break;
-            case 11:
-                if ( !isBody )
-                {
-                    isBody = VerifyPixel( PX_FLOODFILL, localPos, ScanOffsets [ 2 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 5 ] );
-                }
-                break;
-            case 12:
-                if ( !isBody )
-                {
-                    isBody = VerifyPixel( PX_FLOODFILL, localPos, ScanOffsets [ 1 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 6 ] );
-                }
-                break;
-            case 13:
-                if ( !isBody )
-                {
-                    isBody = VerifyPixel( PX_FLOODFILL, localPos, ScanOffsets [ 3 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 4 ] );
-                }
-                break;
-            default:
-                return;
+            }
         }
-          
+    
+                
         if ( isBody )
         {
             // Modify the pixel if it is a body pixel.
@@ -227,11 +171,10 @@ inline void FloodFillBody( int2 localPos, int pixelType )
             
             // Set the flood fill modified flag.
             InterlockedCompareExchange( fillModified, false, true, 0 );
-        }
-        else
+        }else
         {
             // Set the flood fill modified flag to false.
-            InterlockedCompareExchange( fillModified, true, false, 0 );
+            InterlockedExchange( fillModified, false, 0 );
         }
         
         // Sync the threads in the group, this way they alll see the initialized values.
@@ -247,33 +190,56 @@ inline void RemoveNonHair( int2 localPos, int pixelType )
 {
     bool isHair = false;
     
-    // Check if the pixel is colored as hair but is not hair.
-    [forcecase]
-    switch ( true )
+    // If the curret pixel isnt hair, return.
+    if ( !VerifyPixel( PX_HAIR, localPos, 0 ) )
     {
-        case 0:
-            isHair = VerifyPixel( pixelType, localPos, ScanOffsets [ 0 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] );
-            break;
-        case 1:
-            if ( !isHair )
-            {
-                isHair = VerifyPixel( pixelType, localPos, ScanOffsets [ 3 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 0 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] );
-            }
-            break;
-        case 2:
-            if ( !isHair )
-            {
-                isHair = VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] ) && VerifyPixel( pixelType, localPos, ScanOffsets [ 4 ] );
-            }
-            break;
-        default:
-            return;
+        return;
     }
     
-    // If the pixel is not hair, set it to the background color.
-    if ( !isHair )
+    // Reset the fill modified flag.
+    if ( localPos == 0 )
     {
-        localSharedMatrix [ localPos.x ] [ localPos.y ] = PX_BACKGROUND;
+        fillModified = true;
+    }
+    
+    static const int2 scanMatrix [ 5 ] [ 3 ] =
+    {
+        { SCAN_TOP_LEFT, SCAN_TOP, SCAN_TOP_RIGHT },
+        { SCAN_TOP_RIGHT, SCAN_RIGHT, SCAN_BOTTOM_RIGHT },
+        { SCAN_TOP, SCAN_TOP_RIGHT, SCAN_RIGHT },
+        { SCAN_BOTTOM_LEFT, SCAN_LEFT, SCAN_TOP_LEFT },
+        { SCAN_BOTTOM_LEFT, SCAN_BOTTOM, SCAN_BOTTOM_RIGHT }
+    };
+    
+    while ( fillModified )
+    {
+        // Check if the pixel is colored as hair but is not hair.
+        for ( int i = 0; i < 5; i++ )
+        {
+            isHair = VerifyPixel( pixelType, localPos, scanMatrix [ i ] [ 0 ] ) && VerifyPixel( pixelType, localPos, scanMatrix [ i ] [ 1 ] ) && VerifyPixel( pixelType, localPos, scanMatrix [ i ] [ 2 ] );
+            
+            if ( isHair )
+            {
+                break;
+            }
+        }
+    
+        // If the pixel is not hair, set it to the background color.
+        if ( !isHair )
+        {
+            localSharedMatrix [ localPos.x ] [ localPos.y ] = PX_BACKGROUND;
+            
+            // Set the flood fill modified flag.
+            InterlockedCompareExchange( fillModified, false, true, 0 );
+        }else
+        {
+            // Set the flood fill modified flag to false.
+            InterlockedExchange( fillModified, false, 0 );
+        }
+        
+        // Sync the threads in the group, this way they alll see the initialized values.
+        // This syncs the modified flag as well before the next iteration.
+        GroupMemoryBarrierWithGroupSync();
     }
 }
 

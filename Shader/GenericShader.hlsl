@@ -62,18 +62,21 @@ void main( int3 ThreadId : SV_DispatchThreadID,
     // Sync.
     GroupMemoryBarrierWithGroupSync();
     
-    // FloodFill the body.
-    FloodFillBody( int2( LocalId.xy ), PX_FLOODFILL );
-    
-    // Sync.
-    GroupMemoryBarrierWithGroupSync();
-    
     // If we have more than 2 hair clusters, attempt to merge them.
     [flatten]
     if ( hairClusterCount > 2 )
     {
         MergeHairClusters( hairClusterCount, int2( LocalId.xy ) );
     }
+    
+    // Sync.
+    GroupMemoryBarrierWithGroupSync();
+    
+    // FloodFill the body.
+    FloodFillBody( int2( LocalId.xy ), PX_OUTLINE );
+    
+    // Sync.
+    GroupMemoryBarrierWithGroupSync();   
     
     // Set the group details buffer.
     SetGroupDetails( int2( LocalId.xy ), int( GroupId.x ), int2( ThreadId.xy ) );
