@@ -470,7 +470,7 @@ namespace SCB
                 d3d11Context.CSSetUnorderedAccessViews( 0, [ uav!, BufferManager!.ColorBufferView!, BufferManager.DetectedPlayersView! ] );
 
                 // Dispatch the shader
-                d3d11Context.Dispatch( gpuVender == "AMD" ? ( WindowWidth / 64u ) : ( WindowWidth / 32u ), ( WindowHeight / 1u ), 1u );
+                d3d11Context.Dispatch( gpuVender == "AMD" ? ( WindowWidth / 32u ) : ( WindowWidth / 16u ), ( WindowHeight / 8u ), 1u );
             } catch ( SharpGenException ex )
             {
                 if ( d3d11Device!.DeviceRemovedReason.Failure )

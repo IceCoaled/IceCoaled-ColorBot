@@ -907,8 +907,8 @@ namespace SCB.Atomics
             {
                 { AtomicOps.LeftShift, (atomicValue, inputValue) => atomicValue << inputValue },
                 { AtomicOps.RightShift, (atomicValue, inputValue) => atomicValue >> inputValue },
-                { AtomicOps.RotateLeft, (atomicValue, inputValue) =>  atomicValue << inputValue  |  atomicValue >>  64 - inputValue   },
-                { AtomicOps.RotateRight, (atomicValue, inputValue) =>  atomicValue >> inputValue  |  atomicValue <<  64 - inputValue   }
+                { AtomicOps.RotateLeft, (atomicValue, inputValue) =>  atomicValue << inputValue  |  atomicValue >>  64 - inputValue },
+                { AtomicOps.RotateRight, (atomicValue, inputValue) =>  atomicValue >> inputValue  |  atomicValue <<  64 - inputValue }
             };
         }
 
