@@ -1109,20 +1109,30 @@ Cleanup:
     /// </summary>
     /// 
 
-    [StructLayout( LayoutKind.Sequential, Pack = 4 )]
-    struct Int2( int x, int y )
+    [StructLayout( LayoutKind.Explicit, Pack = 4, Size = 32 )]
+    struct UInt4x2( UInt2 x, UInt2 y, UInt2 z, UInt2 w )
     {
-        public int X = x;
-        public int Y = y;
+        [FieldOffset( 0 )]
+        public UInt2 X = x;
+        [FieldOffset( 8 )]
+        public UInt2 Y = y;
+        [FieldOffset( 16 )]
+        public UInt2 Z = z;
+        [FieldOffset( 24 )]
+        public UInt2 W = w;
     }
 
 
-    [StructLayout( LayoutKind.Sequential, Pack = 4 )]
+    [StructLayout( LayoutKind.Explicit, Pack = 4, Size = 16 )]
     struct Float4
     {
+        [FieldOffset( 0 )]
         public float X;
+        [FieldOffset( 4 )]
         public float Y;
+        [FieldOffset( 8 )]
         public float Z;
+        [FieldOffset( 12 )]
         public float W;
 
         public Float4( float x, float y, float z, float w )
@@ -1142,10 +1152,12 @@ Cleanup:
         }
     }
 
-    [StructLayout( LayoutKind.Sequential, Pack = 4 )]
+    [StructLayout( LayoutKind.Explicit, Pack = 4, Size = 8 )]
     struct Range
     {
+        [FieldOffset( 0 )]
         public float Minimum;
+        [FieldOffset( 4 )]
         public float Maximum;
 
 
@@ -1163,28 +1175,30 @@ Cleanup:
     }
 
 
-    [StructLayout( LayoutKind.Sequential, Pack = 4 )]
+    [StructLayout( LayoutKind.Explicit, Pack = 4, Size = 24 )]
     struct ColorRange( Range redRange, Range greenRange, Range blueRange )
     {
+        [FieldOffset( 0 )]
         public Range RedRange = redRange;
+        [FieldOffset( 8 )]
         public Range GreenRange = greenRange;
+        [FieldOffset( 16 )]
         public Range BlueRange = blueRange;
     }
 
-    [StructLayout( LayoutKind.Sequential, CharSet = CharSet.Ansi, Pack = 4 )]
+    [StructLayout( LayoutKind.Explicit, CharSet = CharSet.Ansi, Pack = 4, Size = 324 )]
     struct ColorRanges
     {
-        [MarshalAs( UnmanagedType.ByValArray, SizeConst = 12 )]
+        [FieldOffset( 0 ), MarshalAs( UnmanagedType.ByValArray, SizeConst = 12 )]
         public ColorRange[] Ranges;
-
+        [FieldOffset( 288 )]
         public uint NumOfRanges;
-
+        [FieldOffset( 292 )]
         public Float4 SwapColor;
-
-        public readonly int SafetyCheck = int.MaxValue;
-
-        [MarshalAs( UnmanagedType.ByValArray, SizeConst = 6 )]
+        [FieldOffset( 308 ), MarshalAs( UnmanagedType.ByValArray, SizeConst = 6 )]
         public char[] Name;
+        [FieldOffset( 312 )]
+        public readonly uint SafetyCheck = uint.MaxValue;
 
         public ColorRanges( uint numOfRanges, ColorRange[] ranges, Float4 swapColor, string name )
         {
@@ -1203,54 +1217,68 @@ Cleanup:
     }
 
 
-    [StructLayout( LayoutKind.Sequential, Pack = 4 )]
+    [StructLayout( LayoutKind.Explicit, Pack = 4, Size = 48 )]
     struct PlayerPosition
     {
-        public Int2 HeadPosition;
-        public Int2 TorsoPosition;
-        public UInt4 BoundingBox;
+        [FieldOffset( 0 )]
+        public UInt2 HeadPosition;
+        [FieldOffset( 8 )]
+        public UInt2 TorsoPosition;
+        [FieldOffset( 16 )]
+        public UInt4x2 BoundingBox;
     }
 
 
 
-    [StructLayout( LayoutKind.Sequential, Pack = 4 )]
-    struct DetectedPlayers
+    [StructLayout( LayoutKind.Explicit, Pack = 4, Size = 304 )]
+    struct DetectedPlayers()
     {
-        [MarshalAs( UnmanagedType.ByValArray, SizeConst = 6 )] //< change for your max player count
-        public PlayerPosition[] PlayerPositions;
-
-        public int DetectedPlayerCount;
-
-        public readonly int SafetyCheck = int.MaxValue;
-
-        /// <summary>
-        /// Regular constructor for the detected players struct. 
-        /// We wont be using this constructor, but its here for reference.
-        /// </summary>
-        public DetectedPlayers( int playerCount, PlayerPosition[] playerPositions )
-        {
-            DetectedPlayerCount = playerCount;
-            PlayerPositions = new PlayerPosition[ 6 ];
-            Array.Copy( playerPositions, PlayerPositions, Math.Min( playerPositions.Length, 6 ) );
-        }
-
-
-        /// <summary>
-        /// Constructor to instantiate the values so we can fill out our shader buffer  
-        /// </summary>
-        public DetectedPlayers()
-        {
-            DetectedPlayerCount = 0;
-            PlayerPositions = new PlayerPosition[ 6 ];
-
-            // Set all the player position variables to 0
-            for ( int i = 0; i < 6; i++ )
-            {
-                PlayerPositions[ i ].HeadPosition = new Int2( 0, 0 );
-                PlayerPositions[ i ].TorsoPosition = new Int2( 0, 0 );
-                PlayerPositions[ i ].BoundingBox = new UInt4( 0, 0, 0, 0 );
-            }
-        }
+        [FieldOffset( 0 ), MarshalAs( UnmanagedType.ByValArray, SizeConst = 6 )] //< change for your max player count
+        public PlayerPosition[] PlayerPositions = new PlayerPosition[ 6 ];
+        [FieldOffset( 288 )]
+        public uint DetectedPlayerCount = 0;
+        [FieldOffset( 292 )]
+        public uint GLOBAL_MERGE_FLAG = 0;
+        [FieldOffset( 296 )]
+        public uint UID_BASE_VALUE = 0;
+        [FieldOffset( 300 )]
+        public readonly uint SafetyCheck = uint.MaxValue;
     }
 
+
+    [StructLayout( LayoutKind.Explicit, Pack = 4, Size = 24 )]
+    struct BoundingBox
+    {
+        [FieldOffset( 0 )]
+        public UInt2 min;
+        [FieldOffset( 8 )]
+        public UInt2 max;
+        [FieldOffset( 16 )]
+        public uint uniqueId;
+        [FieldOffset( 20 )]
+        public uint linked;
+    }
+
+
+    [StructLayout( LayoutKind.Explicit, Pack = 4, Size = 16 )]
+    struct HairCentroid
+    {
+        [FieldOffset( 0 )]
+        public uint TorsoPosition;
+        [FieldOffset( 8 )]
+        public uint uniqueId;
+        [FieldOffset( 12 )]
+        public uint linked;
+    }
+
+    [StructLayout( LayoutKind.Explicit, Pack = 4, Size = 16 )]
+    struct GroupDetails()
+    {
+        [FieldOffset( 0 ), MarshalAs( UnmanagedType.ByValArray, SizeConst = 6 )]
+        public BoundingBox[] boundingBoxes = new BoundingBox[ 6 ];
+        [FieldOffset( 144 ), MarshalAs( UnmanagedType.ByValArray, SizeConst = 6 )]
+        public HairCentroid[] hairCentroids = new HairCentroid[ 6 ];
+        [FieldOffset( 240 )]
+        public uint safetyCheck = uint.MaxValue;
+    }
 }
