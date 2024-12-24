@@ -472,15 +472,26 @@ namespace Utils
                     {
                         gameSettingsMD5 = gameSettingsMD5New;
                         var gameSettings = fileManager.GetInGameSettings();
+                        var outlineColor = fileManager.GetEnemyOutlineColor();
 
-                        // Set the new settings
-                        PlayerData.SetMouseSens( gameSettings.mouseSens );
-                        PlayerData.SetAdsScale( gameSettings.adsScale );
+                        // Get current Settings
+                        var currentAimSettings = PlayerData.GetAimSettings();
+                        var currentOutlineColor = PlayerData.GetOutlineColor();
+
+                        if ( outlineColor.colorName != currentOutlineColor )
+                        {
+                            // Set new outline color
+                            PlayerData.SetOutlineColor( outlineColor.colorName == "custom" ? outlineColor.Rgb : outlineColor.colorName ); // If the user is using custom rgb we send the rgb values through to translate into a tolerance
+                        } else if ( ( float.Abs( gameSettings.mouseSens - currentAimSettings.mouseSens ) > 0.001f || float.Abs( gameSettings.adsScale - currentAimSettings.adsScale ) > 0.001f ) )
+                        {
+                            // Set the new settings
+                            PlayerData.SetMouseSens( gameSettings.mouseSens );
+                            PlayerData.SetAdsScale( gameSettings.adsScale );
+                        }
 #if DEBUG
                         Logger.Log( "Game Settings Changed" );
                         Logger.Log( $"New Game Settings File Hash: {gameSettingsMD5}" );
 #endif
-
                     }
 
                     continue;

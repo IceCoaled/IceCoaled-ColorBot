@@ -2,7 +2,6 @@
 //#define GETRECOILPATTERN
 #endif
 
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Drawing.Drawing2D;
 using System.Runtime.CompilerServices;
@@ -101,7 +100,6 @@ namespace SCB
             this.materialSlider4 = new MaterialSlider();
             this.materialButton3 = new MaterialButton();
             this.materialButton5 = new MaterialButton();
-            this.materialButton6 = new MaterialButton();
             this.toolTip1 = new ToolTip( this.components );
             this.SuspendLayout();
             // 
@@ -162,7 +160,7 @@ namespace SCB
             // materialComboBox1
             // 
             this.materialComboBox1.AutoResize = false;
-            this.materialComboBox1.BackColor = Color.FromArgb( 255, 255, 255 );
+            this.materialComboBox1.BackColor = Color.FromArgb( 231, 255, 108 );
             this.materialComboBox1.Depth = 0;
             this.materialComboBox1.DrawMode = DrawMode.OwnerDrawVariable;
             this.materialComboBox1.DropDownHeight = 174;
@@ -175,7 +173,7 @@ namespace SCB
             this.materialComboBox1.IntegralHeight = false;
             this.materialComboBox1.ItemHeight = 43;
             this.materialComboBox1.Items.AddRange( new object[] { "orange", "red", "green", "yellow", "purple", "cyan" } );
-            this.materialComboBox1.Location = new Point( 383, 203 );
+            this.materialComboBox1.Location = new Point( 2, 55 );
             this.materialComboBox1.MaxDropDownItems = 4;
             this.materialComboBox1.MouseState = MaterialSkin.MouseState.OUT;
             this.materialComboBox1.Name = "materialComboBox1";
@@ -183,6 +181,7 @@ namespace SCB
             this.materialComboBox1.StartIndex = 0;
             this.materialComboBox1.TabIndex = 38;
             this.materialComboBox1.SelectedIndexChanged += this.materialComboBox1_SelectedIndexChanged;
+            this.materialComboBox1.MouseHover += this.MaterialComboBox1_MouseHover;
             // 
             // materialLabel1
             // 
@@ -191,7 +190,7 @@ namespace SCB
             this.materialLabel1.Font = new Font( "Roboto", 16F, FontStyle.Regular, GraphicsUnit.Pixel );
             this.materialLabel1.FontType = MaterialSkin.MaterialSkinManager.fontType.Subtitle1;
             this.materialLabel1.HighEmphasis = true;
-            this.materialLabel1.Location = new Point( 420, 181 );
+            this.materialLabel1.Location = new Point( 37, 33 );
             this.materialLabel1.MouseState = MaterialSkin.MouseState.HOVER;
             this.materialLabel1.Name = "materialLabel1";
             this.materialLabel1.Size = new Size( 118, 19 );
@@ -202,7 +201,7 @@ namespace SCB
             // materialComboBox2
             // 
             this.materialComboBox2.AutoResize = false;
-            this.materialComboBox2.BackColor = Color.FromArgb( 255, 255, 255 );
+            this.materialComboBox2.BackColor = Color.FromArgb( 231, 255, 108 );
             this.materialComboBox2.Depth = 0;
             this.materialComboBox2.DrawMode = DrawMode.OwnerDrawVariable;
             this.materialComboBox2.DropDownHeight = 174;
@@ -215,7 +214,7 @@ namespace SCB
             this.materialComboBox2.IntegralHeight = false;
             this.materialComboBox2.ItemHeight = 43;
             this.materialComboBox2.Items.AddRange( new object[] { "head", "body" } );
-            this.materialComboBox2.Location = new Point( 383, 298 );
+            this.materialComboBox2.Location = new Point( 383, 197 );
             this.materialComboBox2.MaxDropDownItems = 4;
             this.materialComboBox2.MouseState = MaterialSkin.MouseState.OUT;
             this.materialComboBox2.Name = "materialComboBox2";
@@ -231,7 +230,7 @@ namespace SCB
             this.materialLabel2.Font = new Font( "Roboto", 16F, FontStyle.Regular, GraphicsUnit.Pixel );
             this.materialLabel2.FontType = MaterialSkin.MaterialSkinManager.fontType.Subtitle1;
             this.materialLabel2.HighEmphasis = true;
-            this.materialLabel2.Location = new Point( 430, 276 );
+            this.materialLabel2.Location = new Point( 423, 175 );
             this.materialLabel2.MouseState = MaterialSkin.MouseState.HOVER;
             this.materialLabel2.Name = "materialLabel2";
             this.materialLabel2.Size = new Size( 98, 19 );
@@ -242,7 +241,7 @@ namespace SCB
             // materialComboBox3
             // 
             this.materialComboBox3.AutoResize = false;
-            this.materialComboBox3.BackColor = Color.FromArgb( 255, 255, 255 );
+            this.materialComboBox3.BackColor = Color.FromArgb( 231, 255, 108 );
             this.materialComboBox3.Depth = 0;
             this.materialComboBox3.DrawMode = DrawMode.OwnerDrawVariable;
             this.materialComboBox3.DropDownHeight = 174;
@@ -408,7 +407,7 @@ namespace SCB
             this.materialButton3.Depth = 0;
             this.materialButton3.HighEmphasis = true;
             this.materialButton3.Icon = null;
-            this.materialButton3.Location = new Point( 6, 382 );
+            this.materialButton3.Location = new Point( 382, 267 );
             this.materialButton3.Margin = new Padding( 4, 6, 4, 6 );
             this.materialButton3.MouseState = MaterialSkin.MouseState.HOVER;
             this.materialButton3.Name = "materialButton3";
@@ -428,7 +427,7 @@ namespace SCB
             this.materialButton5.Depth = 0;
             this.materialButton5.HighEmphasis = true;
             this.materialButton5.Icon = null;
-            this.materialButton5.Location = new Point( 423, 27 );
+            this.materialButton5.Location = new Point( 401, 324 );
             this.materialButton5.Margin = new Padding( 4, 6, 4, 6 );
             this.materialButton5.MouseState = MaterialSkin.MouseState.HOVER;
             this.materialButton5.Name = "materialButton5";
@@ -441,36 +440,14 @@ namespace SCB
             this.materialButton5.UseVisualStyleBackColor = true;
             this.materialButton5.Click += this.materialButton5_Click;
             // 
-            // materialButton6
-            // 
-            this.materialButton6.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            this.materialButton6.Density = MaterialButton.MaterialButtonDensity.Dense;
-            this.materialButton6.Depth = 0;
-            this.materialButton6.Font = new Font( "Segoe UI", 8.25F, FontStyle.Regular, GraphicsUnit.Point, 0 );
-            this.materialButton6.HighEmphasis = true;
-            this.materialButton6.Icon = null;
-            this.materialButton6.Location = new Point( 2, 27 );
-            this.materialButton6.Margin = new Padding( 4, 6, 4, 6 );
-            this.materialButton6.MouseState = MaterialSkin.MouseState.HOVER;
-            this.materialButton6.Name = "materialButton6";
-            this.materialButton6.NoAccentTextColor = Color.Empty;
-            this.materialButton6.Size = new Size( 217, 36 );
-            this.materialButton6.TabIndex = 53;
-            this.materialButton6.Text = "Compositor Registry Key";
-            this.toolTip1.SetToolTip( this.materialButton6, resources.GetString( "materialButton6.ToolTip" ) );
-            this.materialButton6.Type = MaterialButton.MaterialButtonType.Outlined;
-            this.materialButton6.UseAccentColor = true;
-            this.materialButton6.UseVisualStyleBackColor = true;
-            this.materialButton6.Click += this.materialButton6_Click;
-            // 
             // toolTip1
             // 
-            this.toolTip1.AutoPopDelay = 500;
-            this.toolTip1.BackColor = Color.MidnightBlue;
-            this.toolTip1.InitialDelay = 500;
-            this.toolTip1.ReshowDelay = 100;
+            this.toolTip1.AutomaticDelay = 50;
+            this.toolTip1.AutoPopDelay = 5000;
+            this.toolTip1.InitialDelay = 50;
+            this.toolTip1.ReshowDelay = 10;
             this.toolTip1.ToolTipIcon = ToolTipIcon.Info;
-            this.toolTip1.ToolTipTitle = "ForceFullScreenUpdate";
+            this.toolTip1.ToolTipTitle = "AutomatecColorSelection";
             // 
             // IceColorBot
             // 
@@ -478,7 +455,6 @@ namespace SCB
             this.BackgroundImage = ( Image ) resources.GetObject( "$this.BackgroundImage" );
             this.BackgroundImageLayout = ImageLayout.Center;
             this.ClientSize = new Size( 579, 583 );
-            this.Controls.Add( this.materialButton6 );
             this.Controls.Add( this.materialButton5 );
             this.Controls.Add( this.materialButton3 );
             this.Controls.Add( this.materialSlider4 );
@@ -931,21 +907,6 @@ namespace SCB
             };
         }
 
-        private void materialButton6_Click( object sender, EventArgs e )
-        {
-            if ( !managerInit.fileManager!.CreateFullUpdateRegKey() )
-            {
-                MaterialMessageBox.Show( "Failed to create the registry key", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error );
-            } else
-            {
-                MaterialMessageBox.Show( "Registry key created successfully, Restarting PC in 5 seconds.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information );
-            }
-
-            // Restart the PC, has a 5 second delay.
-            // this uses the shutdown.exe in system32 folder
-            Process.Start( "shutdown", "/r /t 5" );
-        }
-
 
         /// <summary>
         /// Updates the status bar with the given text and color.
@@ -967,5 +928,11 @@ namespace SCB
             statusPanel.Invalidate();
             statusPanel.Update();
         }
+
+        private void MaterialComboBox1_MouseHover( object? sender, EventArgs e )
+        {
+            toolTip1.SetToolTip( materialComboBox1, "This selection is fully automated via ingame settings, only use for emergencies" );
+        }
+
     }
 }

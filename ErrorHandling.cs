@@ -7,6 +7,11 @@ namespace SCB
         // Event for status updates
         public static event Action<string, Color>? OnStatusUpdate;
 
+        internal static async Task PrintToStatusBar( string msg )
+        {
+            OnStatusUpdate?.Invoke( $"Current Status : {msg}", Color.DarkOrange );
+        }
+
         /// <summary>
         /// Handles an exception, logs it, and notifies the UI about the error, then closes the application.
         /// </summary>

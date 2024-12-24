@@ -235,6 +235,17 @@
             return true;
         }
 
+        internal virtual void AssignCustomTolerance( string toleranceName, ColorTolerance customTolerance )
+        {
+            foreach ( var pair in Tolerances )
+            {
+                if ( toleranceName == pair.Key )
+                {
+                    pair.Value[ 0 ] = customTolerance; //< This is [0] because this is specifically for outline colors, which is 1 tolerance per key.
+                }
+            }
+        }
+
         /// <summary>
         /// Gets the swap color used for highlighting or other visual effects.
         /// </summary>
@@ -320,7 +331,40 @@
         {
             if ( e.Key == UpdateType.OutlineColor )
             {
-                CharacterOutlines.SetSelected( e.UpdatedVar );
+                foreach ( var outlineName in CharacterOutlines.Tolerances.Keys )
+                {
+                    if ( e.UpdatedVar == outlineName )
+                    {
+                        CharacterOutlines.SetSelected( e.UpdatedVar );
+                        return;
+                    }
+                }
+
+                int red = 0;
+                int green = 0;
+                int blue = 0;
+
+
+                string[] customColor = e.UpdatedVar.ToString().Split( ',' );
+                foreach ( var value in customColor )
+                {
+                    string rgbName = value.Split( '=' )[ 0 ];
+                    string rgbValue = value.Split( '=' )[ 1 ];
+
+                    if ( rgbName.Contains( 'R' ) )
+                    {
+                        red = Convert.ToInt32( rgbValue );
+
+                    } else if ( rgbName.Contains( 'G' ) )
+                    {
+                        green = Convert.ToInt32( rgbValue );
+                    } else if ( rgbName.Contains( 'B' ) ) //< This wont get hit, but its here for safety.
+                    {
+                        blue = Convert.ToInt32( rgbValue );
+                    }
+                }
+                CharacterOutlines.AssignCustomTolerance( "custom", CustomColorToleranceGenerator( red, green, blue ) );
+                CharacterOutlines.SetSelected( "custom" );
             }
         }
 
@@ -341,12 +385,13 @@
                 { "green", new List<ColorTolerance> { new( 28, 112, 238, 255, 28, 100 ) } },
                 { "cyan", new List<ColorTolerance> { new( 58, 112, 228, 255, 228, 255 ) } },
                 { "yellow", new List<ColorTolerance> { new( 235, 255, 235, 255, 76, 135 ) } },
-                { "purple", new List<ColorTolerance> { new( 192, 255, 58, 102, 142, 255 ) } }
-            }, Color.Purple, "outlnz" );
+                { "purple", new List<ColorTolerance> { new( 192, 255, 58, 102, 142, 255 ) } },
+                { "custom", new List<ColorTolerance> { new(0,0,0,0,0,0 ) } },
+            }, Color.Purple, "orange" );//< We set default color selection to avoid any bugs off rip.
 
 
             // Validate the number of elements in CharacterOutlines
-            if ( CharacterOutlines.Count != 6 )
+            if ( CharacterOutlines.Count != 7 )
             {
                 ErrorHandler.HandleException( new Exception( "CharacterOutlines has incorrect number of elements" ) );
                 return false;
@@ -449,6 +494,30 @@
             {
                 SwapColorsList.Add( feature.GetSwapColor() );
             }
+        }
+
+
+        private ColorTolerance CustomColorToleranceGenerator( int red, int green, int blue )
+        {
+            static (int min, int max) GetToleranceRange( int rgb )
+            {
+                int range = rgb switch
+                {
+                    >= 200 => ( int ) ( rgb * 0.20f ),
+                    >= 10 => ( int ) ( rgb * 0.15f ),
+                    _ => ( int ) ( rgb * 0.10f ),
+                };
+
+                int min = int.Max( 0, rgb - range );
+                int max = int.Min( 255, rgb + range );
+                return (min, max);
+            }
+
+            var redMinMax = GetToleranceRange( red );
+            var greenMinMax = GetToleranceRange( green );
+            var blueMinMax = GetToleranceRange( blue );
+
+            return new( redMinMax.min, redMinMax.max, greenMinMax.min, greenMinMax.max, blueMinMax.min, blueMinMax.max );
         }
     }
 }

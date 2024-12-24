@@ -45,6 +45,9 @@ namespace SCB
             recoilPatternProcessor = new(); // Starts recoil pattern thread in constructor
             colorToleranceManager = new(); // Initializes color tolerances in constructor
 
+            // Get our inital in game settings
+            GetInitialGameSettings();
+
             // Initialize Aimbot
             aimbot = new( ref recoilPatternProcessor! );
 
@@ -73,6 +76,19 @@ namespace SCB
 
             smartuiKeyThread.Start();
             smartGameThread.Start();
+        }
+
+        private void GetInitialGameSettings()
+        {
+            // Get game settings from config file
+            var aimSettings = fileManager.GetInGameSettings();
+            var enemyOutline = fileManager.GetEnemyOutlineColor();
+
+            // Set the initial settings
+            PlayerData.SetAdsScale( aimSettings.adsScale );
+            PlayerData.SetMouseSens( aimSettings.mouseSens );
+            PlayerData.SetOutlineColor( enemyOutline.colorName == "custom" ? enemyOutline.Rgb : enemyOutline.colorName );
+
         }
 
 

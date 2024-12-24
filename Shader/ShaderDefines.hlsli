@@ -61,9 +61,9 @@
 
 ///----------Color-Names-----------///
 // Edit these while we edit the other constants.
-#define COLOR_NAME_OUTLNZ half3( 0, 0, 0 )
-#define COLOR_NAME_HAIR half3( 0, 0, 0 )
-#define COLOR_NAME_SKIN half3( 0, 0, 0 )
+min16uint3 COLOR_NAME_OUTLNZ [ 2 ] = { min16uint3( 0, 0, 0 ), min16uint3( 0, 0, 0 ) };
+min16uint3 COLOR_NAME_HAIR [ 2 ] = { min16uint3( 0, 0, 0 ), min16uint3( 0, 0, 0 ) };
+min16uint3 COLOR_NAME_SKIN [ 2 ] = { min16uint3( 0, 0, 0 ), min16uint3( 0, 0, 0 ) };
 // Add more names here.
 
 ///----------Structs-----------///
@@ -95,6 +95,7 @@ struct HairCluster
     }
 };
 
+
 // Define the Range structure for color limits.
 struct Range
 {
@@ -115,10 +116,9 @@ struct ColorRanges
 {
     ColorRange ranges [ 0x0C ]; // Fixed maximum size.
     uint numOfRanges;
-    float4 swapColor;
-    
+    float4 swapColor;    
     uint safetyCheck; // Debugging purposes, we can use this here as well.
-    half3 name; // Debugging purposes, we can use this here as well.
+    min16uint3 colorName [ 2 ]; // Debugging purposes, we can use this here as well.
     
     // Check if the struct has ranges
     inline bool HasRanges()
@@ -127,10 +127,9 @@ struct ColorRanges
     }
     
     // Check if the name is the same as the compare name.
-    inline bool CheckName( half3 compare )
+    inline bool CheckName( min16uint3 compare [ 2 ])
     {
-        // The ternary result is flipped because all returns true if all elements are true, and we want to return true if all elements are false.
-        return !any( ( name - compare ) ) ? true : false;
+        return !any( colorName [ 0 ] - compare [ 0 ] ) & !any( colorName [ 1 ]  - compare [ 1 ] );
     }
     
     // Because we are using a bitmap, it will be BGRA, z is red, x is blue, y is green.

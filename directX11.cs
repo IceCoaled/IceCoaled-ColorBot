@@ -3,7 +3,10 @@
 #endif
 
 
+using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Drawing.Imaging;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -61,15 +64,15 @@ namespace SCB
         private ID3D11InfoQueue? infoQueue;
         private int strideMismatchCount;
         private int failedCaptureCount;
-        private readonly nint lastMappedValue;
+
+
         // Shader management
-        private ConstantBufferManager? BufferManager { get; set; }
+        private UavBufferManager? bufferManager { get; set; }
         internal ManualResetEventSlim ResettingClass { get; private set; }
 
         // Monitor information
         private uint WindowWidth { get; set; }
         private uint WindowHeight { get; set; }
-
         private int BitsPerPixel { get; set; }
 
 
@@ -90,10 +93,6 @@ namespace SCB
             }
 #endif
 
-            // Set last mapped value to zero to start
-            // this ensures that the first time we map the buffer we dont get a false positive
-            lastMappedValue = 0;
-
             // Get the monitor information
             PInvoke.RECT window = PlayerData.GetRect();
             WindowHeight = ( uint ) window.bottom - ( uint ) window.top;
@@ -108,8 +107,13 @@ namespace SCB
             // Initialize the DirectX 12 device and core components
             InitD3D12();
 
+            // Quick math on thread group size
+            // This is done because we know the wavefront size for amd and nvidia.
+            // Our shader is using the same thread group size as the wave front size for best parallel usage and optimization.
+            uint threadGroupSize = gpuVender == "AMD" ? ( uint ) ( 16 * 4 ) : ( uint ) ( 8 * 4 );
+
             // Create the constant buffer manager
-            BufferManager = new( ref toleranceManager, ref d3d11Device! );
+            bufferManager = new( ref toleranceManager, threadGroupSize, ref d3d11Device! );
 
             // Create the Shader
             CompileAndCreateShaderFromFile();
@@ -467,10 +471,10 @@ namespace SCB
             {
                 // Set the shader, uav, and constant buffer
                 d3d11Context!.CSSetShader( computeShader, null, 0 );
-                d3d11Context.CSSetUnorderedAccessViews( 0, [ uav!, BufferManager!.ColorBufferView!, BufferManager.DetectedPlayersView! ] );
+                d3d11Context.CSSetUnorderedAccessViews( 0, [ uav!, bufferManager!.UAVBuffers!.GetValueOrDefault( "colorRanges" )!.BufferView!, bufferManager.UAVBuffers.GetValueOrDefault( "groupDetailsBuffer" )!.BufferView!, bufferManager.UAVBuffers.GetValueOrDefault( "detectedPlayersBuffer" )!.BufferView! ] );
 
                 // Dispatch the shader
-                d3d11Context.Dispatch( gpuVender == "AMD" ? ( WindowWidth / 32u ) : ( WindowWidth / 16u ), ( WindowHeight / 8u ), 1u );
+                d3d11Context.Dispatch( gpuVender == "AMD" ? ( WindowWidth / 16u ) : ( WindowWidth / 8u ), ( WindowHeight / 4u ), 1u );
             } catch ( SharpGenException ex )
             {
                 if ( d3d11Device!.DeviceRemovedReason.Failure )
@@ -486,7 +490,7 @@ namespace SCB
             } finally
             {
                 // Unset the shader, uav, srv, and constant buffer for the next shader
-                d3d11Context!.CSUnsetUnorderedAccessViews( 0, 3 );
+                d3d11Context!.CSUnsetUnorderedAccessViews( 0, 4 );
                 d3d11Context.CSSetShader( null, null, 0 ); //< unbind the shader i didnt see and option to UnsetShader with vortice, so we will just set it to null.
 
 #if RENDORDOC_DEBUG
@@ -577,7 +581,7 @@ namespace SCB
         /// <summary>
         /// Compiles the shader from a hlsl file, then creates the shader.
         /// </summary>
-        private unsafe void CompileAndCreateShaderFromFile()
+        private unsafe async void CompileAndCreateShaderFromFile()
         {
             // Edit the variables and rewrite the file if needed.
             EditShaderCodeVariables();
@@ -587,10 +591,14 @@ namespace SCB
 #else
             var compileFlags = ShaderFlags.OptimizationLevel3 | ShaderFlags.EnableStrictness
 #endif
+            using ShaderUtils.ShaderIncludehandler includehandler = new();
 
             // Read the shader code from the file
             string rawShaderCode = File.ReadAllText( FileManager.shaderFile );
             IntPtr ansiiShaderCode = Marshal.StringToHGlobalAnsi( rawShaderCode );
+
+            // Update status bar to let user know the compiling may take a couple minutes
+            Task.Run( static async () => { ErrorHandler.PrintToStatusBar( "Compiling Shader, this may take up to 2 minutes." ); } );
 
             // Compile the shader
             SharpGenException? compileException = new
@@ -600,13 +608,14 @@ namespace SCB
             ( nuint ) rawShaderCode.Length,
             string.Empty,
             null,
-            null,
+            includehandler,
             "main",
-            "cs_5_0",
+            "cs_5_1",
             compileFlags,
             EffectFlags.None,
             out Blob? shaderBlob,
             out Blob? errorBlob ) );
+
 
             // Check if the shader compiled successfully
             if ( shaderBlob == null ||
@@ -648,6 +657,9 @@ Cleanup:
             }
         }
 
+
+
+
         /// <summary>
         /// Edits the shader code variables such as GPU vendor, screen width, and screen height, byte width, and number of color ranges.
         /// </summary>
@@ -657,14 +669,17 @@ Cleanup:
 
             try
             {
-                rawShaderCode = File.ReadAllText( FileManager.shaderFile );
+                rawShaderCode = File.ReadAllText( FileManager.shaderDefineFile );
             } catch ( Exception ex )
             {
                 ErrorHandler.HandleException( new Exception( $"Failed to read shader code from path: {FileManager.shaderFile}", ex ) );
             }
 
-            SetDispatchXGroupSize( gpuVender == "AMD" ? 64 : 32, ref rawShaderCode );
-            SetNumColorRanges( BufferManager!.NumOfRanges, ref rawShaderCode );
+            SetXGroupSize( gpuVender == "AMD" ? 16 : 8, ref rawShaderCode );
+            SetNumColorRanges( ( int ) bufferManager!.UAVBuffers!.GetValueOrDefault( "colorRanges" )!.BufferItemCount, ref rawShaderCode );
+            SetColorRangeNames( ref rawShaderCode );
+            SetMaxPlayers( ref rawShaderCode );
+            SetWindowSize( PlayerData.GetRect(), ref rawShaderCode );
 
 #if !DEBUG
             UnCommentDebug( ref rawShaderCode );
@@ -677,17 +692,60 @@ Cleanup:
             }
         }
 
-
-        private void SetDispatchXGroupSize( int threadGroupsize, ref string shaderCode )
+        private void SetColorRangeNames( ref string shaderCode )
         {
-            string pattern = @"#define\s*X_THREADGROUP\s*((int)\d+)";
-            shaderCode = Regex.Replace( shaderCode, pattern, $"#define X_THREADGROUP ((int){threadGroupsize})" );
+            short[,] utf16Name = new short[ 3, 6 ];
+            const string outlnz = "Outlnz";
+            const string hair = "Hair";
+            const string skin = "Skin";
+
+            for ( int o = 0, h = 0, s = 0; ( o < outlnz.Length ) | ( h < hair.Length ) | ( s < skin.Length );
+                o = ( o < outlnz.Length ) ? ++o : o, h = ( h < hair.Length ) ? ++h : h, s = ( s < skin.Length ) ? ++s : s )
+            {
+                utf16Name[ 0, o ] = ( ( short ) outlnz[ o ] );
+                utf16Name[ 1, o ] = ( ( short ) hair[ o ] );
+                utf16Name[ 2, o ] = ( ( short ) skin[ o ] );
+            }
+
+            ImmutableArray<string> definedNames = [ "COLOR_NAME_OUTLNZ", "COLOR_NAME_HAIR", "COLOR_NAME_SKIN" ];
+
+            for ( int i = 0; i < 3; ++i )
+            {
+                string pattern = @$"min16uint3\s*{definedNames[ i ]}\s*[\s*2\s*]\s*=\s*{{\s*min16uint3(\s*\d+,\s*\d+,\s*\d+\s*),\s*min16uint3(\s*\d+,\s*\d+,\s*\d+\s*)\s*}}";
+                shaderCode = Regex.Replace( shaderCode, pattern, $"min16uint3 {definedNames[ i ]} min16uint3 [ 2 ] = {{  min16uint3( {utf16Name[ i, 0 ]}, {utf16Name[ i, 1 ]}, {utf16Name[ i, 2 ]} ), min16uint3( {utf16Name[ i, 3 ]}, {utf16Name[ i, 4 ]}, {utf16Name[ i, 5 ]} ) }}" );
+            }
+        }
+
+
+
+        private void SetMaxPlayers( ref string shaderCode, int maxPlayers = 6 )
+        {
+            string pattern = @"#define\s*MAX_PLAYERS\s*uint(\s*\d+\s*)";
+            shaderCode = Regex.Replace( shaderCode, pattern, $"#define MAX_PLAYERS uint( {maxPlayers} )" );
+        }
+
+        private void SetWindowSize( PInvoke.RECT window, ref string shaderCode )
+        {
+            int szWindowX = window.right - window.left;
+            int szWindowY = window.bottom - window.top;
+            string pattern = @"#define\s*WINDOW_SIZE_X\s*uint(\s*\d+\s*)";
+            shaderCode = Regex.Replace( shaderCode, pattern, $"#define WINDOW_SIZE_X uint( {szWindowX} )" );
+
+            pattern = @"#define\s*WINDOW_SIZE_Y\s*uint(\s*\d+\s*)";
+            shaderCode = Regex.Replace( shaderCode, pattern, $"#define WINDOW_SIZE_Y uint( {szWindowY} )" );
+        }
+
+
+        private void SetXGroupSize( int threadGroupsize, ref string shaderCode )
+        {
+            string pattern = @"#define\s*X_THREADGROUP\s*uint(\s*\d+\s*)";
+            shaderCode = Regex.Replace( shaderCode, pattern, $"#define X_THREADGROUP uint( {threadGroupsize} )" );
         }
 
         private void SetNumColorRanges( int numColorRanges, ref string shaderCode )
         {
-            string pattern = @"#define\s*NUM_COLOR_RANGES\s*\d+";
-            shaderCode = Regex.Replace( shaderCode, pattern, $"#define NUM_COLOR_RANGES {numColorRanges}" );
+            string pattern = @"#define\s*NUM_COLOR_RANGES\s*uint(\s*\d+\s*)";
+            shaderCode = Regex.Replace( shaderCode, pattern, $"#define NUM_COLOR_RANGES uint( {numColorRanges} )" );
         }
 
         private void UnCommentDebug( ref string shaderCode )
@@ -719,7 +777,7 @@ Cleanup:
         /// </summary>
         private void ResetDx11()
         {
-            ColorToleranceManager? colorManager = BufferManager!.ColorManager ?? null;
+            ColorToleranceManager? colorManager = bufferManager!.ColorManager ?? null;
 
             // Clean up the resources
             Cleanup();
@@ -735,8 +793,13 @@ Cleanup:
             // Reset the class
             InitD3D12();
 
+            // Quick math on thread group size
+            // This is done because we know the wavefront size for amd and nvidia.
+            // Our shader is using the same thread group size as the wave front size for best parallel usage and optimization.
+            uint threadGroupSize = gpuVender == "AMD" ? ( uint ) ( 16 * 4 ) : ( uint ) ( 8 * 4 );
+
             // Create the constant buffer manager
-            BufferManager = new( ref colorManager!, ref d3d11Device! );
+            bufferManager = new( ref colorManager!, threadGroupSize, ref d3d11Device! );
 
             // Create the Shader
             CompileAndCreateShaderFromFile();
@@ -752,7 +815,7 @@ Cleanup:
             PlayerData.OnUpdate -= OutLineColorUpdated;
 
             windowCapture?.Dispose();
-            BufferManager?.Dispose();
+            bufferManager?.Dispose();
             d3d11Context?.Dispose();
             d3d11Device?.Dispose();
             uaBuffer?.Dispose();
@@ -786,7 +849,7 @@ Cleanup:
 
                 // Dispose managed resources
                 ResettingClass?.Dispose();
-                BufferManager?.Dispose(); //< dispose this first to release the device pointer
+                bufferManager?.Dispose(); //< dispose this first to release the device pointer
                 d3d11Context?.Dispose();
                 d3d11Device?.Dispose();
                 uaBuffer?.Dispose();
@@ -802,14 +865,42 @@ Cleanup:
             }
             disposed = true;
         }
-
-
-
     }
 
 
 
-    internal partial class ConstantBufferManager : IDisposable
+
+    internal partial class UavBuffer( ID3D11Buffer? buffer, ID3D11UnorderedAccessView? bufferView, uint itemCount ) : IDisposable
+    {
+        private bool Disposed { get; set; } = false;
+        internal ID3D11Buffer? Buffer { get; set; } = buffer;
+        internal ID3D11UnorderedAccessView? BufferView { get; set; } = bufferView;
+        internal uint BufferItemCount { get; set; } = itemCount;
+
+        public void Dispose()
+        {
+            Dispose( true );
+            GC.SuppressFinalize( this );
+        }
+
+        protected virtual void Dispose( bool disposing )
+        {
+            if ( disposing &&
+                !Disposed )
+            {
+                Buffer?.Dispose();
+                Buffer = null!;
+                BufferView?.Dispose();
+                BufferView = null!;
+                BufferItemCount = 0;
+            }
+            Disposed = true;
+        }
+    }
+
+
+
+    internal partial class UavBufferManager : IDisposable
     {
         private bool disposed;
 
@@ -817,40 +908,33 @@ Cleanup:
 
         private ID3D11Device? D3D11Device { get; set; }
 
-        private List<Tuple<string, List<ColorRange>, Color>>? Ranges { get; set; }
-
-        internal ID3D11Buffer? ColorBuffer { get; private set; }
-
-        internal ID3D11Buffer? DetectedPlayersBuffer { get; private set; }
-
-        internal ID3D11UnorderedAccessView? ColorBufferView { get; private set; }
-
-        internal ID3D11UnorderedAccessView? DetectedPlayersView { get; private set; }
-
-        internal int NumOfRanges => Ranges!.Count;
+        public Dictionary<string, UavBuffer> UAVBuffers { get; set; }
 
 
         /// <summary>
-        /// Initializes a new instance of the ConstantBufferManager class.
+        /// Initializes a new instance of the UAVBufferManager class.
         /// </summary>
         /// <param name="colorManager">Color tolerance manager</param>
         /// <param name="d3d11Device">d3d11 device</param>
-        internal ConstantBufferManager( ref ColorToleranceManager colorManager, ref ID3D11Device d3d11Device )
+        internal UavBufferManager( ref ColorToleranceManager colorManager, uint threadGroupSize, ref ID3D11Device d3d11Device )
         {
             // Set the color manager and d3d11 device
             ColorManager = colorManager;
             D3D11Device = d3d11Device;
 
+            // Instantiate buffer dictionary
+            UAVBuffers = [];
+
             // Create the color range buffer and view
             CreateColorRanges( ref colorManager );
-
-            // Create the detected players buffer and view
-            CreateBuffer( BufferType.DetectedPlayers );
-            SetupUAViewForBuffer( BufferType.DetectedPlayers );
+            // Create detected players buffer and view
+            CreateDetectedPlayers();
+            // Create groupDetails buffer and view
+            CreateGroupDetailsBuffer( threadGroupSize );
         }
 
 
-        ~ConstantBufferManager()
+        ~UavBufferManager()
         {
             Dispose( false );
         }
@@ -881,8 +965,11 @@ Cleanup:
                 Marshal.StructureToPtr( temp, structPtr, false );
 
                 // Check the safety check value is correct
-                nint safetyCheck = structPtr + Marshal.OffsetOf<T>( "SafetyCheck" ).ToInt32();
-                if ( Marshal.ReadInt32( safetyCheck ) != int.MaxValue )
+                nint safetyCheck = structPtr + Marshal.OffsetOf<T>( "SafetyCheck" ).ToInt32();//< We have safety check hard coded this is stupid but for a POC we will be fine
+#if DEBUG
+                Debug.Assert( safetyCheck.ToInt64() % sizeof( uint ) == 0, message: "Safety check pointer Is not correctly aligned!" );//< This doesnt need to be encapsulated in the ifdef, its just for readability.
+#endif
+                if ( Unsafe.Read<uint>( safetyCheck.ToPointer() ) != uint.MaxValue )
                 {
                     Marshal.FreeHGlobal( allocHeader );
                     ErrorHandler.HandleException( new Exception( $"Failed to serialize: {nameof( T )} " ) );
@@ -896,7 +983,9 @@ Cleanup:
         /// <summary>
         /// Creates the UA buffer for the color ranges.
         /// </summary>
-        private unsafe void CreateBuffer( BufferType bufferType )
+        /// <param name="bufferType">Buffer type input so we know what factory to use</param>
+        /// <param name="colorRanges">Reference to color ranges list to create the serialized struct</param>
+        private unsafe ID3D11Buffer? CreateBuffer( BufferType bufferType, [Optional] List<Tuple<string, List<ColorRange>, Color>>? colorRanges, [Optional] uint bufferItemCount )
         {
             int szAlloc = 0;
             int szStride = 0;
@@ -908,11 +997,11 @@ Cleanup:
                 {
                     ColorRanges factory( int i )
                     {
-                        return new ColorRanges( ( uint ) Ranges![ i ].Item2.Count,
-                            [ .. Ranges[ i ].Item2 ], new Float4( Ranges[ i ].Item3.B, Ranges[ i ].Item3.G, Ranges[ i ].Item3.R, Ranges[ i ].Item3.A ),
-                            Ranges[ i ].Item1 );
+                        return new ColorRanges( ( uint ) colorRanges![ i ].Item2.Count,
+                            [ .. colorRanges[ i ].Item2 ], new Float4( colorRanges[ i ].Item3.B, colorRanges[ i ].Item3.G, colorRanges[ i ].Item3.R, colorRanges[ i ].Item3.A ),
+                            colorRanges[ i ].Item1 );
                     }
-                    SerializeStructure( NumOfRanges, factory, out allocHeader, out szAlloc, out szStride );
+                    SerializeStructure( colorRanges!.Count, factory, out allocHeader, out szAlloc, out szStride );
                 }
                 break;
                 case BufferType.DetectedPlayers:
@@ -921,12 +1010,21 @@ Cleanup:
                     {
                         return new DetectedPlayers(); //< We only need 1 struct for this buffer
                     }
-                    SerializeStructure( 1, factory, out allocHeader, out szAlloc, out szStride );
+                    SerializeStructure( ( int ) bufferItemCount, factory, out allocHeader, out szAlloc, out szStride );
+                }
+                break;
+                case BufferType.GroupDetails:
+                {
+                    GroupDetails factory( int i )
+                    {
+                        return new GroupDetails();
+                    }
+                    SerializeStructure( ( int ) bufferItemCount, factory, out allocHeader, out szAlloc, out szStride );
                 }
                 break;
                 default:
                 ErrorHandler.HandleException( new Exception( "Buffer type to serialize not detected" ) );
-                return;
+                return default;
             }
 
             // Check if the allocation header is null
@@ -940,7 +1038,7 @@ Cleanup:
             {
                 Usage = ResourceUsage.Default,
                 BindFlags = BindFlags.UnorderedAccess | BindFlags.ShaderResource,
-                CPUAccessFlags = bufferType == BufferType.ColorRanges ? CpuAccessFlags.None : CpuAccessFlags.Read,
+                CPUAccessFlags = ( bufferType == BufferType.ColorRanges || bufferType == BufferType.GroupDetails ) ? CpuAccessFlags.None : CpuAccessFlags.Read,
                 MiscFlags = ResourceOptionFlags.BufferStructured,
                 StructureByteStride = ( uint ) szStride,
                 ByteWidth = ( uint ) szAlloc,
@@ -950,12 +1048,7 @@ Cleanup:
             SubresourceData subRData = new( allocHeader.ToPointer() );
 
             // Create the buffer
-            ID3D11Buffer? buffer = bufferType switch
-            {
-                BufferType.ColorRanges => ColorBuffer = D3D11Device!.CreateBuffer( bufferDesc, subRData ),
-                BufferType.DetectedPlayers => DetectedPlayersBuffer = D3D11Device!.CreateBuffer( bufferDesc, subRData ),
-                _ => null
-            };
+            ID3D11Buffer? buffer = D3D11Device!.CreateBuffer( bufferDesc, subRData );
 
             if ( buffer == null )
             {
@@ -964,13 +1057,17 @@ Cleanup:
 
             // Free the memory
             Marshal.FreeHGlobal( allocHeader );
+
+            return buffer;
         }
 
 
         /// <summary>
         /// Setup the unordered access view for the buffer.
         /// </summary>
-        private void SetupUAViewForBuffer( BufferType bufferType )
+        /// <param name="buffer">Reference to buffer to create view for it</param>
+        /// <param name="bufferType">Buffer type so we know number of elements</param>
+        private ID3D11UnorderedAccessView? SetupUAViewForBuffer( ref ID3D11Buffer? buffer, BufferType bufferType, [Optional] List<Tuple<string, List<ColorRange>, Color>>? colorRanges, [Optional] uint elementCount )
         {
             var description = new UnorderedAccessViewDescription
             {
@@ -979,41 +1076,52 @@ Cleanup:
                 Buffer = new BufferUnorderedAccessView()
                 {
                     FirstElement = 0,
-                    NumElements = bufferType == BufferType.ColorRanges ? ( uint ) NumOfRanges : 1U,
+                    NumElements = bufferType == BufferType.ColorRanges ? ( uint ) colorRanges!.Count : elementCount,
                     Flags = BufferUnorderedAccessViewFlags.None
                 }
             };
 
-            ID3D11UnorderedAccessView? uav = bufferType switch
-            {
-                BufferType.ColorRanges => ColorBufferView = D3D11Device!.CreateUnorderedAccessView( ColorBuffer, description ),
-                BufferType.DetectedPlayers => DetectedPlayersView = D3D11Device!.CreateUnorderedAccessView( DetectedPlayersBuffer, description ),
-                _ => null
-            };
+            // Create uav
+            ID3D11UnorderedAccessView? uav = D3D11Device!.CreateUnorderedAccessView( buffer, description );
 
             if ( uav == null )
             {
                 ErrorHandler.HandleException( new Exception( $"Failed to create unordered access view: {bufferType}" ) );
             }
+
+            return uav;
+        }
+
+        private void CreateDetectedPlayers()
+        {
+            // Create the detected players buffer and view
+            var detectedPlayersBuffer = CreateBuffer( BufferType.DetectedPlayers, bufferItemCount: 1 );
+            UAVBuffers.Add( nameof( detectedPlayersBuffer ), new UavBuffer( detectedPlayersBuffer, SetupUAViewForBuffer( ref detectedPlayersBuffer, BufferType.DetectedPlayers, elementCount: 1 ), 1 ) );
+        }
+
+        private void CreateGroupDetailsBuffer( uint threadGroupSize )
+        {
+            var groupDetailsBuffer = CreateBuffer( BufferType.GroupDetails, bufferItemCount: threadGroupSize );
+            UAVBuffers.Add( nameof( groupDetailsBuffer ), new UavBuffer( groupDetailsBuffer, SetupUAViewForBuffer( ref groupDetailsBuffer, BufferType.GroupDetails, elementCount: threadGroupSize ), threadGroupSize ) );
         }
 
 
         /// <summary>
         /// Setup for character feature colors, outfit colors.
         /// </summary>
-        /// <param name="colorManager"></param>
+        /// <param name="colorManager"> Reference to color manager class</param>
         private void CreateColorRanges( ref ColorToleranceManager colorManager )
         {
 
             // Get the color ranges from the color manager
             var characterFeatureColors = colorManager.CharacterFeatures;
 
-            // Initialize colorRanges
-            Ranges = [];
+            // Initialize our ranges.
+            List<Tuple<string, List<ColorRange>, Color>>? colorRanges = [];
 
             // Parse the character feature colors, outfit colors, and outlines
-            ParseTolerances( ref characterFeatureColors );
-            OutlineColor();
+            ParseTolerances( ref characterFeatureColors, ref colorRanges );
+            OutlineColor( ref colorRanges );
         }
 
 
@@ -1021,8 +1129,9 @@ Cleanup:
         /// <summary>
         /// Parses the color tolerances from the color manager.
         /// </summary>
-        /// <param name="tolerances"></param>
-        private void ParseTolerances( ref List<ToleranceBase>? tolerances )
+        /// <param name="tolerances">Color tolerances from color manager</param>
+        /// <param name="colorRanges">Color ranges the reference to the color ranges list for creation</param>
+        private void ParseTolerances( ref List<ToleranceBase>? tolerances, ref List<Tuple<string, List<ColorRange>, Color>>? colorRanges )
         {
             if ( tolerances != null )
             {
@@ -1041,8 +1150,7 @@ Cleanup:
                             new Range( ( uint ) range.Green!.Minimum, ( uint ) range.Green.Maximum ),
                             new Range( ( uint ) range.Blue!.Minimum, ( uint ) range.Blue.Maximum ) ) );
                         }
-
-                        Ranges!.Add( new Tuple<string, List<ColorRange>, Color>( name, ranges, swap ) );
+                        colorRanges!.Add( new Tuple<string, List<ColorRange>, Color>( name, ranges, swap ) );
                     }
                 }
             }
@@ -1051,7 +1159,7 @@ Cleanup:
         /// <summary>
         /// Setup for the outline color.
         /// </summary>
-        private void OutlineColor()
+        private void OutlineColor( ref List<Tuple<string, List<ColorRange>, Color>>? colorRanges )
         {
             var selected = ColorManager!.CharacterOutlines.GetSelected();
             var outline = ColorManager.CharacterOutlines.GetColorTolerance( selected );
@@ -1067,11 +1175,11 @@ Cleanup:
 
 
             // Add the current outline color to the ranges
-            Ranges!.Add( new Tuple<string, List<ColorRange>, Color>( selected, Range, swap ) );
+            colorRanges!.Add( new Tuple<string, List<ColorRange>, Color>( selected, Range, swap ) );
 
             // Create the buffer and view
-            CreateBuffer( BufferType.ColorRanges );
-            SetupUAViewForBuffer( BufferType.ColorRanges );
+            var colorRangesBuffer = CreateBuffer( BufferType.ColorRanges, colorRanges );
+            UAVBuffers.Add( nameof( colorRanges ), new UavBuffer( colorRangesBuffer, SetupUAViewForBuffer( ref colorRangesBuffer, BufferType.ColorRanges, colorRanges ), ( uint ) colorRanges.Count ) );
         }
 
         public void Dispose()
@@ -1085,11 +1193,10 @@ Cleanup:
             if ( disposing &&
                 !disposed )
             {
-                ColorBuffer?.Dispose();
-                DetectedPlayersBuffer?.Dispose();
-                ColorBufferView?.Dispose();
-                DetectedPlayersView?.Dispose();
-                D3D11Device?.Release();
+                foreach ( var buffer in UAVBuffers )
+                {
+                    buffer.Value?.Dispose();
+                }
             }
             disposed = true;
         }
@@ -1098,6 +1205,7 @@ Cleanup:
         {
             ColorRanges,
             DetectedPlayers,
+            GroupDetails,
         }
     }
 
@@ -1186,7 +1294,7 @@ Cleanup:
         public Range BlueRange = blueRange;
     }
 
-    [StructLayout( LayoutKind.Explicit, CharSet = CharSet.Ansi, Pack = 4, Size = 324 )]
+    [StructLayout( LayoutKind.Explicit, CharSet = CharSet.Unicode, Pack = 4, Size = 324 )]
     struct ColorRanges
     {
         [FieldOffset( 0 ), MarshalAs( UnmanagedType.ByValArray, SizeConst = 12 )]
@@ -1195,10 +1303,12 @@ Cleanup:
         public uint NumOfRanges;
         [FieldOffset( 292 )]
         public Float4 SwapColor;
-        [FieldOffset( 308 ), MarshalAs( UnmanagedType.ByValArray, SizeConst = 6 )]
-        public char[] Name;
-        [FieldOffset( 312 )]
+        [FieldOffset( 308 )]
         public readonly uint SafetyCheck = uint.MaxValue;
+        [FieldOffset( 312 ), MarshalAs( UnmanagedType.ByValArray, SizeConst = 6 )]
+        public char[] Name;
+
+
 
         public ColorRanges( uint numOfRanges, ColorRange[] ranges, Float4 swapColor, string name )
         {
@@ -1275,10 +1385,10 @@ Cleanup:
     struct GroupDetails()
     {
         [FieldOffset( 0 ), MarshalAs( UnmanagedType.ByValArray, SizeConst = 6 )]
-        public BoundingBox[] boundingBoxes = new BoundingBox[ 6 ];
+        public BoundingBox[] BoundingBoxes = new BoundingBox[ 6 ];
         [FieldOffset( 144 ), MarshalAs( UnmanagedType.ByValArray, SizeConst = 6 )]
-        public HairCentroid[] hairCentroids = new HairCentroid[ 6 ];
+        public HairCentroid[] HairCentroids = new HairCentroid[ 6 ];
         [FieldOffset( 240 )]
-        public uint safetyCheck = uint.MaxValue;
+        public uint SafetyCheck = uint.MaxValue;
     }
 }

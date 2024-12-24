@@ -139,18 +139,18 @@ inline float Distance( uint2 pos1, uint2 pos2 )
 }
 
 // Checks if input name is one of the range names.
-uint CompareNames( half3 name )
+uint CompareNames( min16uint3 name [ 2 ] )
 {
     uint result = NO_MATCHING_NAME;
-    if ( !any( name - COLOR_NAME_OUTLNZ ) )
+    if ( !any( name [ 0 ] - COLOR_NAME_OUTLNZ [ 0 ] ) & !any( name [ 1 ] - COLOR_NAME_OUTLNZ [ 1 ] ) )
     {
         result = PX_OUTLINE;
     }
-    else if ( !any( name - COLOR_NAME_HAIR ) )
+    else if ( !any( name [ 0 ] - COLOR_NAME_HAIR [ 0 ] ) & !any( name [ 1 ] - COLOR_NAME_HAIR [ 1 ] ) )
     {
         result = PX_HAIR;
     }
-    else if ( !any( name - COLOR_NAME_SKIN ) )
+    else if ( !any( name [ 0 ] - COLOR_NAME_SKIN [ 0 ] ) & !any( name [ 1 ] - COLOR_NAME_SKIN [ 1 ] ) )
     {
         result = PX_SKIN;
     }
@@ -475,7 +475,7 @@ void CheckAndSetHairCluster( const uint2 hairPos )
     {
         // Check if the hair position is within the threshold of any of the hair clusters.
         volatile uint hairGroupable = 0;      
-        for ( uint i = 0; i < MAX_PLAYERS || i < hairClusterCount; i++ )
+        for ( uint i = 0; i < MAX_PLAYERS & i < hairClusterCount; i++ )
         {
             const uint2 avgPos = hairClusters [ i ].GetAveragePos();
             hairGroupable = DetectGrouping( avgPos, hairPos, HAIR_CLUSTER_THRESHOLD );
@@ -532,9 +532,8 @@ void MergeHairClusters( const uint2 localPos, const uint failedThread )
         }
         else if ( failedThread == 0 )
         {
-            volatile uint y = 1;
-            for ( uint i = 0; ( ( i < MAX_PLAYERS || i < hairClusterCount ) & ( y < MAX_PLAYERS || y < hairClusterCount ) );
-            i = ( i < MAX_PLAYERS || i < hairClusterCount ) ? ++i : i, y = ( y < MAX_PLAYERS || y < hairClusterCount ) ? ++y : y )
+            for ( uint i = 0, y = 1; y < MAX_PLAYERS && y < hairClusterCount;
+            ++i, y = ( y < MAX_PLAYERS && y < hairClusterCount ) ? ++y : y )
             {          
                 if ( hairClusters [ i ].IsMerged() )
                 {
@@ -585,7 +584,7 @@ void MergeHairClusters( const uint2 localPos, const uint failedThread )
 // If the pixel is within the range, add the pixel to the detected object buffer and set the pixel to the swap color.
 // We use buffer indexing because if we load the whole color range it flogs the gpu instruction cache.
 // As well as we dont need to load the whole buffer, just the parts we need.
-int CheckAndSetPixel( const uint2 localPos, const float4 pixelColor, const half3 rangeName, out float4 swapColor )
+int CheckAndSetPixel( const uint2 localPos, const float4 pixelColor, const min16uint3 rangeName [ 2 ], out float4 swapColor )
 {
     // Dummy value for interlocked operation
     volatile uint dummy = 0;
@@ -701,9 +700,8 @@ void BoundingBoxMergeHelper( const uint2 localPos, uint failedThread )
         }
         else if ( failedThread == 0 )
         {
-            volatile uint y = 1;
-            for ( uint i = 0; i < MAX_PLAYERS & y < MAX_PLAYERS;
-            i = ( i < MAX_PLAYERS ) ? ++i : i, y = ( y < MAX_PLAYERS ) ? ++y : y )
+            for ( uint i = 0, y = 1; y < MAX_PLAYERS;
+            ++i, y = ( y < MAX_PLAYERS ) ? ++y : y )
             {
                 if ( IsGroupMerged( groupMin [ i ], groupMax [ i ] ) )
                 {
@@ -750,7 +748,7 @@ void AssignUniqueIds( const uint segmentPos, const uint2 groupId )
     // Interlocked operation dummy value.
     volatile uint dummy = 0;
       
-    for ( uint i = 0; i < MAX_PLAYERS || i < hairClusterCount; i++ )
+    for ( uint i = 0; i < MAX_PLAYERS && i < hairClusterCount; i++ )
     {                   
         // Check if hair centroid is inside box        
         if ( BbToHairLink( groupMin [ segmentPos ], groupMax [ segmentPos ], hairClusters [ i ].GetAveragePos() ) )
@@ -843,8 +841,7 @@ void MergeGlobalDetails( const uint segmentPos, const uint2 groupId, uint failed
         else if ( failedThread == 0 && segmentPos < MAX_PLAYERS && !GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].IsMerged() && 
             !GroupDetailsBuffer [ groupId.x ].hairCentroids [ segmentPos ].IsMerged() )
         {
-            volatile uint otherSegmentPos = 0;
-            for ( uint i = 0; i < NUM_GROUPS; i++, otherSegmentPos = 0 )
+            for ( uint i = 0, otherSegmentPos = 0; i < NUM_GROUPS; i++, otherSegmentPos = 0 )
             {
                 if ( i == groupId.x )
                 {
@@ -947,7 +944,7 @@ void SetGroupDetails( const uint2 localPos, const uint2 groupId, const uint2 glo
 #ifdef DEBUG
     // Update texture with all edited details.
     GetAndSetDetailsForGlobal( localPos, globalPos, swapColor, failedThread );
-#endif
+#endif             
   
     // Merge the group buffer details.
     MergeGlobalDetails( segmentPos, groupId, failedThread );
