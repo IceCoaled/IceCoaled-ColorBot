@@ -86,8 +86,6 @@ namespace SCB
         }
 
 
-
-        // Example Function: Start Frame Capture
         public void StartFrameCapture( IntPtr device, IntPtr windowHandle )
         {
             if ( RDocApi.StartFrameCapture == IntPtr.Zero )
