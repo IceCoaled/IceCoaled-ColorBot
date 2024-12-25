@@ -77,7 +77,7 @@ namespace SCB
             // Add RednorDoc capture folder to our debug folder
             string renderDocCaptureFolder = FileManager.debugFolder + @"RendorDocCaptures";
 
-            if ( Directory.Exists( renderDocCaptureFolder ) )
+            if ( !Directory.Exists( renderDocCaptureFolder ) )
             {
                 Directory.CreateDirectory( renderDocCaptureFolder );
             }
@@ -86,6 +86,13 @@ namespace SCB
         }
 
 
+
+        /// <summary>
+        ///  Our custom StartFrameCapture render doc api call.
+        ///  Both params should be marked optional as you just choose one.
+        /// </summary>
+        /// <param name="device"> pointer to our d3d device</param>
+        /// <param name="windowHandle">handle to a window(HWND)</param>
         public void StartFrameCapture( IntPtr device, IntPtr windowHandle )
         {
             if ( RDocApi.StartFrameCapture == IntPtr.Zero )
@@ -101,7 +108,13 @@ namespace SCB
         }
 
 
-
+        /// <summary>
+        ///  Our custom EtartFrameCapture render doc api call.
+        ///  Both params should be marked optional as you just choose one.
+        /// </summary>
+        /// <param name="device"> pointer to our d3d device</param>
+        /// <param name="windowHandle">handle to a window(HWND)</param>
+        /// <returns>Returns 1 if most recent caputure was discared, 0 if there was an error and no capture at all</returns>
         public uint EndFrameCapture( IntPtr device, IntPtr windowHandle )
         {
             if ( RDocApi.EndFrameCapture == IntPtr.Zero )
@@ -117,6 +130,11 @@ namespace SCB
         }
 
 
+        /// <summary>
+        /// Custom Path output for the frame capture files.
+        /// We use this so we know they are going to our own debug folder.
+        /// </summary>
+        /// <param name="path"></param>
         public void SetCaptureFilePathTemplate( string path )
         {
             if ( RDocApi.SetCaptureFilePathTemplate == IntPtr.Zero )
@@ -140,9 +158,13 @@ namespace SCB
 
 
 
+        /// <summary>
+        /// Gets the current api version number from the renderdoc setting file.
+        /// </summary>
+        /// <param name="dirPath">Path to renderdoc folder</param>
+        /// <returns>Returns the api number with the minor normalized and </returns>
         private int GetApiVersionFromJson( string dirPath )
         {
-            // We specifically look for the line "api_version": "1.3.131",
 
             // Concatenate the path
             string jsonPath = Path.GetFullPath( RendorDocJson, dirPath );
@@ -166,21 +188,18 @@ namespace SCB
                     string version = split[ 3 ][ ..^1 ];
                     version = version.Replace( ".", "0" );
 
-                    // remove last 2 characters and return as a whole number
+                    // remove last 2 characters and get the rest of the line
                     versionNum = int.Parse( version[ ..^1 ] );
                 }
             }
 
-            // Now we need to convert it to ta valid version number. I.E.
-            // if we are 1.3.131 we need to conver it to 10300, 1.2.xxx to 10200, 1.4.1 to 10401, 1.4.2 to 10402
-
+            // Now we pack the version number.
             if ( versionNum != -1 )
             {
                 int major = versionNum / 10000;
                 int minor = ( versionNum - major * 10000 ) / 100;
                 return major * 10000 + minor * 100;
             }
-
             return versionNum;
         }
 
@@ -208,25 +227,6 @@ namespace SCB
             eRENDERDOC_API_Version_1_4_2 = 10402,    // RENDERDOC_API_1_4_2 = 1 04 02
             eRENDERDOC_API_Version_1_5_0 = 10500,    // RENDERDOC_API_1_5_0 = 1 05 00
             eRENDERDOC_API_Version_1_6_0 = 10600,    // RENDERDOC_API_1_6_0 = 1 06 00
-        }
-
-
-        // Capture Options Enum
-        public enum CaptureOption
-        {
-            AllowVSync,
-            AllowFullscreen,
-            ApiValidation,
-            CaptureCallstacks,
-            CaptureCallstacksOnlyActions,
-            DelayForDebugger,
-            VerifyBufferAccess,
-            HookIntoChildren,
-            RefAllResources,
-            CaptureAllCmdLists,
-            DebugOutputMute,
-            AllowUnsupportedVendorExtensions,
-            SoftMemoryLimit,
         }
 
         // API Struct

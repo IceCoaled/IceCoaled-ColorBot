@@ -17,9 +17,9 @@ namespace SCB
         {
 
 #if RENDERDOC_INJECTION_WARNING
-            // Pop windows message box to remind that we need to attach renderdoc, we are using a windows message box as we cant use MaterialSkin till its initialized
+            // Pop windows message box to remind that we need to attach renderdoc, we are using a windows message box as we cant use MaterialSkin till its initialized.
+            // We also use this as the message box doesnt block any threads so render doc is still able t oattach without any issues.
             var diagResult = System.Windows.Forms.MessageBox.Show( "Please attach RenderDoc to this process before continuing.", "Information", MessageBoxButtons.OKCancel, MessageBoxIcon.Information );
-
 
             // If user cancels, exit
             if ( diagResult == DialogResult.OK )
@@ -32,11 +32,12 @@ namespace SCB
 #endif
 
 
+
+
+#if DEBUG
 #if RENDORDOC_DEBUG
             RenderDocApi renderDocApi = new();
 #endif
-
-#if DEBUG
             Logger.Start();
             Logger.Log( "Logger Initialized" );
 #endif
@@ -48,7 +49,8 @@ namespace SCB
             ManagerInit managerInit = new();
 #endif
 
-            // setup perlin noise table
+            // Setup perlin noise table
+            // We have this here just in case we use the perlin nose function.
             Mathf.SetupPermutationTable();
 
 
