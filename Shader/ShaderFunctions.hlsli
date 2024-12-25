@@ -532,8 +532,9 @@ void MergeHairClusters( const uint2 localPos, const uint failedThread )
         }
         else if ( failedThread == 0 )
         {
-            for ( uint i = 0, y = 1; y < MAX_PLAYERS && y < hairClusterCount;
-            ++i, y = ( y < MAX_PLAYERS && y < hairClusterCount ) ? ++y : y )
+            volatile uint y = 1;
+            for ( uint i = 0; y < MAX_PLAYERS & y < hairClusterCount;
+            ++i, y = ( y < MAX_PLAYERS & y < hairClusterCount ) ? ++y : y )
             {          
                 if ( hairClusters [ i ].IsMerged() )
                 {
@@ -700,7 +701,8 @@ void BoundingBoxMergeHelper( const uint2 localPos, uint failedThread )
         }
         else if ( failedThread == 0 )
         {
-            for ( uint i = 0, y = 1; y < MAX_PLAYERS;
+            volatile uint y = 1;
+            for ( uint i = 0; y < MAX_PLAYERS;
             ++i, y = ( y < MAX_PLAYERS ) ? ++y : y )
             {
                 if ( IsGroupMerged( groupMin [ i ], groupMax [ i ] ) )
@@ -802,7 +804,7 @@ void AssignUniqueIds( const uint segmentPos, const uint2 groupId )
 // The swap color input will only be valid if the pixel type is hair, outline or skin.
 // Otherwise the flood fill and background colors are global.
 // Im hoping to only use this for debugging
-inline void GetAndSetDetailsForGlobal( const uint2 localPos, const uint2 globalPos, const float4 swapColor,  uint failedThread )
+inline void GetAndSetDetailsForGlobal( const uint2 localPos, const uint2 globalPos, const unorm float4 swapColor,  uint failedThread )
 {    
     if ( failedThread == 0 && any( swapColor ) )
     {
@@ -841,7 +843,8 @@ void MergeGlobalDetails( const uint segmentPos, const uint2 groupId, uint failed
         else if ( failedThread == 0 && segmentPos < MAX_PLAYERS && !GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].IsMerged() && 
             !GroupDetailsBuffer [ groupId.x ].hairCentroids [ segmentPos ].IsMerged() )
         {
-            for ( uint i = 0, otherSegmentPos = 0; i < NUM_GROUPS; i++, otherSegmentPos = 0 )
+            volatile uint otherSegmentPos = 0;
+            for ( uint i = 0; i < NUM_GROUPS; i++, otherSegmentPos = 0 )
             {
                 if ( i == groupId.x )
                 {
@@ -926,7 +929,7 @@ void MergeGlobalDetails( const uint segmentPos, const uint2 groupId, uint failed
 // This will merge the potential 6 bounding boxes into 1 bounding box.
 // Get the locations of the average hair position(s).
 // Add the details to the group details buffer.
-void SetGroupDetails( const uint2 localPos, const uint2 groupId, const uint2 globalPos, const float4 swapColor, uint failedThread )
+void SetGroupDetails( const uint2 localPos, const uint2 groupId, const uint2 globalPos, const unorm float4 swapColor, uint failedThread )
 {
     // Add all bounding boxes to the group details uav buffer.
     // This also assigns unique id's to mathching boxes and hair centroids.
@@ -956,6 +959,6 @@ inline void DrawBoundingBox( const uint2 globalPos )
 { 
     for ( uint i = 0; i < MAX_PLAYERS; i++ )
     {
-        UavBuffer [ globalPos ] = IsPixelBoundingBox( globalPos, PlayerPositionBuffer [ 0 ].players [ i ].boundingBox ) ? BOUNDING_BOX_COLOR : UavBuffer [ globalPos ];
+        UavBuffer [ globalPos ] = IsPixelBoundingBox( globalPos, PlayerPositionBuffer [ 0 ].players [ i ].boundingBox ) ? BOUNDING_BOX_COLOR: UavBuffer[ globalPos ];
     }
 }

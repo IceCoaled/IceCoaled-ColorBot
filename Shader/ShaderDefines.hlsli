@@ -1,17 +1,12 @@
 ///----------User-Defines-----------///
 
 // AMD uses 64, NVIDIA uses 32 wavefront/warp size.
-#define X_THREADGROUP uint( 16 )
+#define X_THREADGROUP uint( 16 ) //< leave as decmial for editing form.
 #define Y_THREADGROUP uint( 4 ) //< This never changes.
 
 // Monitor resolution
 #define WINDOW_SIZE_X uint( 2560 )
 #define WINDOW_SIZE_Y uint( 1440 )
-
-// pixel format
-// We will always use UNORM for the bit representation.
-// All we are worried about here is the order of the channels, as we are using a bitmap.
-#define BRGA
 
 // Debug flag
 #define DEBUG //< If we set debug flag it will define debug automatically
@@ -39,13 +34,13 @@
 #define NUM_COLOR_RANGES uint( 20 )//< Keep in decmial form for editing code.
 
 // Debug pixel replacement color
-#define BACKGROUND_PIXEL_COLOR float4( 0.164, 0.415, 0.545, 0.54 )  // Dark Khaki( 42, 106, 138, 0.54 )
+unorm float4 BACKGROUND_PIXEL_COLOR = float4( 0.164, 0.415, 0.545, 0.54 );  // Dark Khaki( 42, 106, 138, 0.54 )
 
 // Object Fill Color'
-#define OBJECT_FILL_COLOR float4( 0.294, 0.317, 0.0, 0.51 )  // Deep Teal( 75, 81, 0, 0.51 )
+unorm float4 OBJECT_FILL_COLOR = float4( 0.294, 0.317, 0.0, 0.51 );  // Deep Teal( 75, 81, 0, 0.51 )
 
 // Bounding Box Color
-#define BOUNDING_BOX_COLOR float4( 0.0, 0.0, 1.0, 1.0 )  // Red ( 0, 0, 255, 1.0 )
+unorm float4 BOUNDING_BOX_COLOR = float4( 0.0, 0.0, 1.0, 1.0 ); // Red ( 0, 0, 255, 1.0 )
 
 // Max uint value
 #define MAX_UINT uint( 0xFFFFFFFF )
@@ -135,15 +130,10 @@ struct ColorRanges
     // Because we are using a bitmap, it will be BGRA, z is red, x is blue, y is green.
     inline bool IsInRange( float4 pixel, uint rangeIndex )
     {
-#ifdef BRGA
+
         return ( pixel.z >= ranges [ rangeIndex ].redRange.minimum && pixel.x <= ranges [ rangeIndex ].redRange.maximum &&
                 pixel.y >= ranges [ rangeIndex ].greenRange.minimum && pixel.y <= ranges [ rangeIndex ].greenRange.maximum &&
                 pixel.x >= ranges [ rangeIndex ].blueRange.minimum && pixel.z <= ranges [ rangeIndex ].blueRange.maximum ) ? true : false;
-#else
-        return ( pixel.x >= ranges[rangeIndex].redRange.minimum && pixel.x <= ranges[rangeIndex].redRange.maximum &&
-                pixel.y >= ranges[rangeIndex].greenRange.minimum && pixel.y <= ranges[rangeIndex].greenRange.maximum &&
-                pixel.z >= ranges[rangeIndex].blueRange.minimum && pixel.z <= ranges[rangeIndex].blueRange.maximum ) ? true : false;
-#endif
     }
     
     // Checks of the safety check value is the max int value.

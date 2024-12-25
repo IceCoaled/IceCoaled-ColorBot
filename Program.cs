@@ -1,6 +1,6 @@
 #if DEBUG
-//#define RENDORDOC_DEBUG //< Enable RenderDoc debugging.
-//#define RENDERDOC_INJECTION_WARNING //< Show a message box to remind user to attach renderdoc, if youre using this, you dont start the process from renderdoc.
+#define RENDORDOC_DEBUG //< Enable RenderDoc debugging.
+#define RENDERDOC_INJECTION_WARNING //< Show a message box to remind user to attach renderdoc, if youre using this, you dont start the process from renderdoc.
 #endif //< renderdoc debug
 
 

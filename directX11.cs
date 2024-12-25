@@ -1,7 +1,6 @@
 ﻿#if DEBUG
-//#define RENDORDOC_DEBUG
+#define RENDORDOC_DEBUG
 #endif
-
 
 using System.Collections.Immutable;
 using System.Diagnostics;
@@ -9,7 +8,7 @@ using System.Drawing.Imaging;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.RegularExpressions;
+using ShaderUtils;
 using SharpGen.Runtime;
 using Vortice.D3DCompiler;
 using Vortice.Direct3D;
@@ -581,36 +580,31 @@ namespace SCB
         /// <summary>
         /// Compiles the shader from a hlsl file, then creates the shader.
         /// </summary>
-        private unsafe async void CompileAndCreateShaderFromFile()
+        private unsafe void CompileAndCreateShaderFromFile()
         {
             // Edit the variables and rewrite the file if needed.
-            EditShaderCodeVariables();
+            ShaderUtils.ShaderUtilities.EditShaderCode( ( int ) bufferManager!.UAVBuffers!.GetValueOrDefault( "colorRanges" )!.BufferItemCount, gpuVender == "AMD" ? 16 : 8 );
 
 #if DEBUG
-            var compileFlags = ShaderFlags.Debug | ShaderFlags.SkipOptimization | ShaderFlags.EnableStrictness;
+            var compileFlags = ShaderFlags.Debug | ShaderFlags.SkipOptimization | ShaderFlags.EnableStrictness | ( ( ShaderFlags ) ( ( uint ) 1 << 19 ) ) | ( ( ShaderFlags ) ( ( uint ) 1 << 21 ) );
 #else
             var compileFlags = ShaderFlags.OptimizationLevel3 | ShaderFlags.EnableStrictness
 #endif
-            using ShaderUtils.ShaderIncludehandler includehandler = new();
-
-            // Read the shader code from the file
-            string rawShaderCode = File.ReadAllText( FileManager.shaderFile );
-            IntPtr ansiiShaderCode = Marshal.StringToHGlobalAnsi( rawShaderCode );
+            var includehandler = new ShaderIncludehandler( FileManager.shaderFolder );
 
             // Update status bar to let user know the compiling may take a couple minutes
-            Task.Run( static async () => { ErrorHandler.PrintToStatusBar( "Compiling Shader, this may take up to 2 minutes." ); } );
+            ErrorHandler.PrintToStatusBar( "Compiling Shader, this may take up to 2 minutes." );
+
 
             // Compile the shader
             SharpGenException? compileException = new
             (
-            Compiler.Compile(
-            ansiiShaderCode.ToPointer(),
-            ( nuint ) rawShaderCode.Length,
-            string.Empty,
+            Compiler.CompileFromFile(
+            FileManager.shaderFile,
             null,
             includehandler,
             "main",
-            "cs_5_1",
+            "cs_5_0",
             compileFlags,
             EffectFlags.None,
             out Blob? shaderBlob,
@@ -634,22 +628,28 @@ namespace SCB
                 }
             }
 
-            // Free the shader code memory
-            Marshal.FreeHGlobal( ansiiShaderCode );
-
 
             // Create the shader
-            computeShader = d3d11Device!.CreateComputeShader( shaderBlob!.BufferPointer.ToPointer(), shaderBlob!.BufferSize, null );
-            if ( computeShader == null )
+            try
             {
-                compileException = new( "Failed to create compute shader." );
-                goto Cleanup;
+                computeShader = d3d11Device!.CreateComputeShader( shaderBlob!.BufferPointer.ToPointer(), shaderBlob!.BufferSize, null );
+                if ( computeShader == null )
+                {
+                    compileException = new( "Failed to create compute shader." );
+                    goto Cleanup;
+                }
+            } catch ( SharpGenException ex )
+            {
+                compileException = ex;
+
             }
+
 
 Cleanup:
 // Dispose the shader and error blobs
             shaderBlob?.Dispose();
             errorBlob?.Dispose();
+            includehandler?.Dispose();
 
             if ( compileException.ResultCode != 0x0 )
             {
@@ -657,102 +657,6 @@ Cleanup:
             }
         }
 
-
-
-
-        /// <summary>
-        /// Edits the shader code variables such as GPU vendor, screen width, and screen height, byte width, and number of color ranges.
-        /// </summary>
-        private void EditShaderCodeVariables()
-        {
-            string rawShaderCode = " ";
-
-            try
-            {
-                rawShaderCode = File.ReadAllText( FileManager.shaderDefineFile );
-            } catch ( Exception ex )
-            {
-                ErrorHandler.HandleException( new Exception( $"Failed to read shader code from path: {FileManager.shaderFile}", ex ) );
-            }
-
-            SetXGroupSize( gpuVender == "AMD" ? 16 : 8, ref rawShaderCode );
-            SetNumColorRanges( ( int ) bufferManager!.UAVBuffers!.GetValueOrDefault( "colorRanges" )!.BufferItemCount, ref rawShaderCode );
-            SetColorRangeNames( ref rawShaderCode );
-            SetMaxPlayers( ref rawShaderCode );
-            SetWindowSize( PlayerData.GetRect(), ref rawShaderCode );
-
-#if !DEBUG
-            UnCommentDebug( ref rawShaderCode );
-#endif
-
-            // Compare raw shader code to the shader file to see if its changed
-            if ( rawShaderCode != File.ReadAllText( FileManager.shaderFile ) )
-            {
-                File.WriteAllText( FileManager.shaderFile, rawShaderCode );
-            }
-        }
-
-        private void SetColorRangeNames( ref string shaderCode )
-        {
-            short[,] utf16Name = new short[ 3, 6 ];
-            const string outlnz = "Outlnz";
-            const string hair = "Hair";
-            const string skin = "Skin";
-
-            for ( int o = 0, h = 0, s = 0; ( o < outlnz.Length ) | ( h < hair.Length ) | ( s < skin.Length );
-                o = ( o < outlnz.Length ) ? ++o : o, h = ( h < hair.Length ) ? ++h : h, s = ( s < skin.Length ) ? ++s : s )
-            {
-                utf16Name[ 0, o ] = ( ( short ) outlnz[ o ] );
-                utf16Name[ 1, o ] = ( ( short ) hair[ o ] );
-                utf16Name[ 2, o ] = ( ( short ) skin[ o ] );
-            }
-
-            ImmutableArray<string> definedNames = [ "COLOR_NAME_OUTLNZ", "COLOR_NAME_HAIR", "COLOR_NAME_SKIN" ];
-
-            for ( int i = 0; i < 3; ++i )
-            {
-                string pattern = @$"min16uint3\s*{definedNames[ i ]}\s*[\s*2\s*]\s*=\s*{{\s*min16uint3(\s*\d+,\s*\d+,\s*\d+\s*),\s*min16uint3(\s*\d+,\s*\d+,\s*\d+\s*)\s*}}";
-                shaderCode = Regex.Replace( shaderCode, pattern, $"min16uint3 {definedNames[ i ]} min16uint3 [ 2 ] = {{  min16uint3( {utf16Name[ i, 0 ]}, {utf16Name[ i, 1 ]}, {utf16Name[ i, 2 ]} ), min16uint3( {utf16Name[ i, 3 ]}, {utf16Name[ i, 4 ]}, {utf16Name[ i, 5 ]} ) }}" );
-            }
-        }
-
-
-
-        private void SetMaxPlayers( ref string shaderCode, int maxPlayers = 6 )
-        {
-            string pattern = @"#define\s*MAX_PLAYERS\s*uint(\s*\d+\s*)";
-            shaderCode = Regex.Replace( shaderCode, pattern, $"#define MAX_PLAYERS uint( {maxPlayers} )" );
-        }
-
-        private void SetWindowSize( PInvoke.RECT window, ref string shaderCode )
-        {
-            int szWindowX = window.right - window.left;
-            int szWindowY = window.bottom - window.top;
-            string pattern = @"#define\s*WINDOW_SIZE_X\s*uint(\s*\d+\s*)";
-            shaderCode = Regex.Replace( shaderCode, pattern, $"#define WINDOW_SIZE_X uint( {szWindowX} )" );
-
-            pattern = @"#define\s*WINDOW_SIZE_Y\s*uint(\s*\d+\s*)";
-            shaderCode = Regex.Replace( shaderCode, pattern, $"#define WINDOW_SIZE_Y uint( {szWindowY} )" );
-        }
-
-
-        private void SetXGroupSize( int threadGroupsize, ref string shaderCode )
-        {
-            string pattern = @"#define\s*X_THREADGROUP\s*uint(\s*\d+\s*)";
-            shaderCode = Regex.Replace( shaderCode, pattern, $"#define X_THREADGROUP uint( {threadGroupsize} )" );
-        }
-
-        private void SetNumColorRanges( int numColorRanges, ref string shaderCode )
-        {
-            string pattern = @"#define\s*NUM_COLOR_RANGES\s*uint(\s*\d+\s*)";
-            shaderCode = Regex.Replace( shaderCode, pattern, $"#define NUM_COLOR_RANGES uint( {numColorRanges} )" );
-        }
-
-        private void UnCommentDebug( ref string shaderCode )
-        {
-            string pattern = @"#define\s*DEBUG\s*";
-            shaderCode = Regex.Replace( shaderCode, pattern, "//#define DEBUG" );
-        }
 
 
         private void OutLineColorUpdated( object sender, PlayerUpdateCallbackEventArgs e )
@@ -956,7 +860,7 @@ Cleanup:
             allocHeader = structPtr = Marshal.AllocHGlobal( allocSize );
 
             // Add structures to the memory
-            for ( int i = 0; i < numOfStructs; i++ )
+            for ( int i = 0; i < numOfStructs; ++i, structPtr += strideSize )
             {
                 // Create a struct to be serialized        
                 T temp = structFactory( i );
@@ -974,8 +878,6 @@ Cleanup:
                     Marshal.FreeHGlobal( allocHeader );
                     ErrorHandler.HandleException( new Exception( $"Failed to serialize: {nameof( T )} " ) );
                 }
-                // Move the pointer to the next struct
-                structPtr += strideSize;
             }
         }
 
@@ -1006,7 +908,7 @@ Cleanup:
                 break;
                 case BufferType.DetectedPlayers:
                 {
-                    DetectedPlayers factory( int _ )
+                    DetectedPlayers factory( int i )
                     {
                         return new DetectedPlayers(); //< We only need 1 struct for this buffer
                     }
@@ -1095,8 +997,8 @@ Cleanup:
         private void CreateDetectedPlayers()
         {
             // Create the detected players buffer and view
-            var detectedPlayersBuffer = CreateBuffer( BufferType.DetectedPlayers, bufferItemCount: 1 );
-            UAVBuffers.Add( nameof( detectedPlayersBuffer ), new UavBuffer( detectedPlayersBuffer, SetupUAViewForBuffer( ref detectedPlayersBuffer, BufferType.DetectedPlayers, elementCount: 1 ), 1 ) );
+            var detectedPlayersBuffer = CreateBuffer( BufferType.DetectedPlayers, bufferItemCount: 2 );
+            UAVBuffers.Add( nameof( detectedPlayersBuffer ), new UavBuffer( detectedPlayersBuffer, SetupUAViewForBuffer( ref detectedPlayersBuffer, BufferType.DetectedPlayers, elementCount: 2 ), 2 ) );
         }
 
         private void CreateGroupDetailsBuffer( uint threadGroupSize )
@@ -1390,5 +1292,12 @@ Cleanup:
         public HairCentroid[] HairCentroids = new HairCentroid[ 6 ];
         [FieldOffset( 240 )]
         public uint SafetyCheck = uint.MaxValue;
+    }
+
+    [StructLayout( LayoutKind.Explicit, Pack = 4, Size = 4 )]
+    struct FovDebugDraw( float userFov )
+    {
+        [FieldOffset( 0 )]
+        float Fov = userFov;
     }
 }
