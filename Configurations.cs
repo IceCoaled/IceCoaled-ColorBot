@@ -1,4 +1,4 @@
-﻿using System.Drawing.Drawing2D;
+using System.Drawing.Drawing2D;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -70,11 +70,6 @@ namespace SCB
         protected override void OnPaint( PaintEventArgs e )
         {
             base.OnPaint( e );
-
-            // Create a new rectangle with a modified Y position (15 pixels down from the top)
-            var clientRect = new Rectangle( this.ClientRectangle.X, this.ClientRectangle.Y + 20,
-                                           this.ClientRectangle.Width, this.ClientRectangle.Height - 15 );
-
             // Create a GraphicsPath to define rounded corners
             GraphicsPath path = new();
             Rectangle windowRect = this.ClientRectangle;
@@ -147,7 +142,7 @@ namespace SCB
                 // Serialize the blob fields to a json string
                 var jsonString = JsonSerializer.Serialize( blobFields, options );
 
-                if ( jsonString == null )
+                if ( jsonString is null )
                 {
                     ErrorHandler.HandleExceptionNonExit( new InvalidOperationException( "Failed to serialize settings." ) );
                     return;
@@ -167,7 +162,7 @@ namespace SCB
                 // Read the json string from the file
                 string? jsonString = File.ReadAllText( FileManager.configFolder + $"config{configNum}.json" );
 
-                if ( jsonString == null )
+                if ( jsonString is null )
                 {
                     ErrorHandler.HandleExceptionNonExit( new InvalidOperationException( "Failed to read config file." ) );
                     return;
@@ -197,13 +192,13 @@ namespace SCB
                 {
                     FieldInfo? field = playerDataBlob.GetField( setting.Key, BindingFlags.Static | BindingFlags.NonPublic );
 
-                    if ( field == null )
+                    if ( field is null )
                     {
                         ErrorHandler.HandleExceptionNonExit( new InvalidOperationException( "Failed to get field." ) );
                         continue;
                     }
 
-                    if ( setting.Value == null )
+                    if ( setting.Value is null )
                     {
                         continue;
                     }
@@ -265,7 +260,7 @@ namespace SCB
                 Logger.Log( "-------------------" );
                 Logger.Log( "Aim Speed: " + aimSettings.aimSpeed );
                 Logger.Log( "Aim Smoothing: " + aimSettings.aimSmoothing );
-                Logger.Log( "Deadzone: " + aimSettings.deadzone );
+                Logger.Log( "Deadzone: " + aimSettings.deadZone );
                 Logger.Log( "Aim Key: " + aimSettings.aimKey );
                 if ( aimSettings.prediction )
                 {
@@ -337,7 +332,7 @@ namespace SCB
                     List<PointF>? points = JsonSerializer.Deserialize<List<PointF>>( ref reader, options );
 
                     // Error handling if points are null or insufficient to form a Bezier curve.
-                    if ( points == null || points.Count < 2 )
+                    if ( points is null || points.Count < 2 )
                     {
                         ErrorHandler.HandleException( new JsonException( "Invalid BezierPointCollection data." ) );
                     }
@@ -349,7 +344,7 @@ namespace SCB
                     // All intermediate points represent control points for the Bezier curve.
                     var controlPoints = points.Skip( 1 ).Take( points.Count - 2 ).ToList();
 
-                    return new Utils.BezierPointCollection( start, end, controlPoints );
+                    return new Utils.BezierPointCollection( ref start, ref end, ref controlPoints );
                 }
 
                 /// <summary>

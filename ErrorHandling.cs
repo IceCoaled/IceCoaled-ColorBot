@@ -67,7 +67,7 @@ namespace SCB
             for ( int i = 5; i > 0; i-- )
             {
                 OnStatusUpdate?.Invoke( $"Closing... in {i}", Color.Crimson );
-                Thread.Sleep( 1000 );
+                await Utils.Watch.AsyncSecondsSleep( 1 );
             }
 
             // Call the exit method
@@ -77,7 +77,7 @@ namespace SCB
             } );
 
             // Freeze this thread as calling Application.Exit() will not close the application immediately
-            await Task.Delay( 10000 );
+            await Utils.Watch.AsyncSecondsSleep( 10 );
 
             // Force close the application
             Environment.Exit( -1 );

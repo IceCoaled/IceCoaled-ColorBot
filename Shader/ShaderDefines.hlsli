@@ -1,94 +1,156 @@
 ///----------User-Defines-----------///
 
-// AMD uses 64, NVIDIA uses 32 wavefront/warp size.
-#define X_THREADGROUP uint( 16 ) //< leave as decmial for editing form.
-#define Y_THREADGROUP uint( 4 ) //< This never changes.
+// Anything in this section in decmial form gets modified before
+// each compile
+
+// AMD uses 64, NVIDIA uses 32 wavefront/warp size
+// We use wavefront size * 4 for out thread groups
+// Its best for performance to make thread groups multiples of the hardwars wave front
+static const uint X_THREADGROUP = uint( 16 );
+static const uint Y_THREADGROUP = uint( 4 );
 
 // Monitor resolution
-#define WINDOW_SIZE_X uint( 2560 )
-#define WINDOW_SIZE_Y uint( 1440 )
+static const uint WINDOW_SIZE_X = uint( 4000 );
+static const uint WINDOW_SIZE_Y = uint( 10000 );
+
+// Scan Fov
+static const uint2 SCAN_FOV = uint2( 100, 100 );
 
 // Debug flag
 #define DEBUG //< If we set debug flag it will define debug automatically
 
-// Max loop cap.
-// We need this as a safety backup so no runtime calculated loop can get stuck without a breakout.
-#define LOOP_SAFETY_BREAKOUT  0x3E8
 
 // Number of players we are detecting
-#define MAX_PLAYERS uint( 6 )//< Keep in decmial form for editing form
-
-// Thread group size
-#define THREAD_GROUP_SIZE uint( X_THREADGROUP * Y_THREADGROUP ) 
-
-// Segment size
-#define SEGMENT_SIZE uint( THREAD_GROUP_SIZE / MAX_PLAYERS )
-
-// Number of segments
-#define NUM_SEGMENTS uint( THREAD_GROUP_SIZE / SEGMENT_SIZE )
-
-// Number of groups
-#define NUM_GROUPS uint( ( ( WINDOW_SIZE_X / X_THREADGROUP ) * ( WINDOW_SIZE_Y / Y_THREADGROUP ) ) ) 
+static const uint MAX_PLAYERS = uint( 10 ); 
 
 // Number of color ranges in the constant buffer
-#define NUM_COLOR_RANGES uint( 20 )//< Keep in decmial form for editing code.
+static const uint NUM_COLOR_RANGES = uint( 20 );  
 
-// Debug pixel replacement color
-unorm float4 BACKGROUND_PIXEL_COLOR = float4( 0.164, 0.415, 0.545, 0.54 );  // Dark Khaki( 42, 106, 138, 0.54 )
+// Color range names
+// Add more names here as needed
+static const uint4 COLOR_NAME_OUTLNZ = uint4( 0, 0, 0, 0 );
+static const uint4 COLOR_NAME_HAIR = uint4( 0, 0, 0, 0 );
 
-// Object Fill Color'
-unorm float4 OBJECT_FILL_COLOR = float4( 0.294, 0.317, 0.0, 0.51 );  // Deep Teal( 75, 81, 0, 0.51 )
+// Max number of groups for scan box
+// Max Scan Box Buffer size
+// These are used for memory initialization
+// Makes things less dynamic which is important for shaders
+static const int MAX_SCAN_BOX_BUFFER_SIZE = int( 50000 );
+static const int MAX_SCAN_BOX_GROUPS = int( 10000 );
 
-// Bounding Box Color
-unorm float4 BOUNDING_BOX_COLOR = float4( 0.0, 0.0, 1.0, 1.0 ); // Red ( 0, 0, 255, 1.0 )
+///------------Shader-Constants-------------///
 
-// Max uint value
-#define MAX_UINT uint( 0xFFFFFFFF )
-#define MIN_UINT uint( 0x0 )
+// Thread group details for whole texture
+static const uint THREAD_GROUP_SIZE = uint( X_THREADGROUP * Y_THREADGROUP );
+static const uint X_GROUP_MAX = uint( ( ( WINDOW_SIZE_X + ( X_THREADGROUP - 1 ) ) / X_THREADGROUP ) );
+static const uint Y_GROUP_MAX = uint( ( ( WINDOW_SIZE_Y + ( Y_THREADGROUP - 1 ) ) / Y_THREADGROUP ) );
 
-// Merged flag
-#define MERGED_FLAG uint( 0xDE1E7E )
+// Number of thread groups for whole window
+static const uint TOTAL_NUM_GROUPS = uint( ( ( WINDOW_SIZE_X + X_THREADGROUP - 1 ) / X_THREADGROUP ) * ( ( WINDOW_SIZE_Y + Y_THREADGROUP - 1 ) / Y_THREADGROUP ) );
 
-///----------Return-Codes-----------///
-#define NO_RANGE_ERROR uint( 0xB00B5 )
-#define ALIGNMENT_ERROR uint( 0x6969 )
-#define NO_MATCHING_NAME uint( 0xBADA55 )
+// Max number of ranges
+static const uint MAX_RANGE_SIZE = 12u;
 
-///----------Color-Names-----------///
-// Edit these while we edit the other constants.
-min16uint3 COLOR_NAME_OUTLNZ [ 2 ] = { min16uint3( 0, 0, 0 ), min16uint3( 0, 0, 0 ) };
-min16uint3 COLOR_NAME_HAIR [ 2 ] = { min16uint3( 0, 0, 0 ), min16uint3( 0, 0, 0 ) };
-min16uint3 COLOR_NAME_SKIN [ 2 ] = { min16uint3( 0, 0, 0 ), min16uint3( 0, 0, 0 ) };
-// Add more names here.
+// Bounding box color
+static const unorm float4 BOUNDING_BOX_COLOR = float4( 1.0, 0.0, 0.0, 1.0 );
+
+// Scan box color
+static const unorm float4 SCAN_BOX_COLOR = float4( 1.0, 0.91, 0.09, 1.0 );
+
+// Scan box classification details
+// 32 bits / 2 bits per classification
+static const int MAX_SCAN_BOX_SIDE = 700u;
+static const int CLASSIFICATIONS_PER_UINT = 16u;
+static const uint CLASSIFICATIONS_PER_BYTE = 4u;
+static const int ACTUAL_SCAN_BOX_BUFFER_SIZE = int( float( ( SCAN_FOV.x * SCAN_FOV.y + CLASSIFICATIONS_PER_UINT - 1 ) / CLASSIFICATIONS_PER_UINT ) );
+static const int MAX_SCAN_BOX_BUFFER_INDEX = int( ( ACTUAL_SCAN_BOX_BUFFER_SIZE << 2 ) - 1 );
+
+// Scan Box min max 
+static const uint2 SCAN_BOX_MIN = uint2( ( WINDOW_SIZE_X / 2 ) - ( SCAN_FOV.x / 2 ), ( WINDOW_SIZE_Y / 2 ) - ( SCAN_FOV.y / 2 ) );
+static const uint2 SCAN_BOX_MAX = uint2( ( WINDOW_SIZE_X / 2 ) + ( SCAN_FOV.x / 2 ), ( WINDOW_SIZE_Y / 2 ) + ( SCAN_FOV.y / 2 ) );
+
+// First group that will overlap the scan box
+static const uint2 FIRST_GROUP_OVERLAP = uint2( ( SCAN_BOX_MIN.x - ( SCAN_BOX_MIN.x & ( X_THREADGROUP - 1 ) ) ), ( SCAN_BOX_MIN.y - ( SCAN_BOX_MIN.y & ( Y_THREADGROUP - 1 ) ) ) );
+
+// Thread group details for scan box
+static const int SCAN_GROUPS_X = uint( ( ( SCAN_BOX_MAX.x - ( SCAN_BOX_MAX.x & ( X_THREADGROUP - 1 ) ) ) - FIRST_GROUP_OVERLAP.x ) / X_THREADGROUP );
+static const int SCAN_GROUPS_Y = uint( ( ( SCAN_BOX_MAX.y - ( SCAN_BOX_MAX.y & ( Y_THREADGROUP - 1 ) ) ) - FIRST_GROUP_OVERLAP.y ) / Y_THREADGROUP );
+static const int ACTUAL_SCAN_GROUPS = int( ( SCAN_GROUPS_X * SCAN_GROUPS_Y ) );
+
+
+// Hud blocker
+// This is amount of y pixels from top down
+// To be used in shader, in order to 
+// Reduce noise in results
+static const uint BOTTOM_HUD_BLOCK = uint( ( WINDOW_SIZE_Y - uint( floor( float( WINDOW_SIZE_Y * 0.16 ) ) ) ) );
+
+// Min / Max uint values
+static const uint MIN_UINT = 0x0000000u;
+static const uint MAX_UINT = 0xFFFFFFFFu;
+static const int MAX_INT = 0x7FFFFFFF;
+static const int MIN_INT = 0x80000000;
+static const uint MAX_USHORT = 0xFFFFu;
+static const uint MAX_BYTE = 0xFFu;
+
+// Status codes
+static const uint STATUS_OK = 1;
+static const uint STATUS_ERROR = 2;
+static const uint STATUS_NO_MIN_MAX = 3;
+
+// Error return codes
+static const uint NULL_RANGE_ERROR = 0xA55355u;
+static const uint NO_RANGE_ERROR = 0xB00B5u;
+static const uint ALIGNMENT_ERROR = 0x6969u;
+static const uint NO_MATCHING_NAME = 0xBADA55u;
+
+// Pixel classifications
+// max gives us an easy way to check if we have an error
+static const uint PX_MAX = 0x04u;
+static const uint PX_OUTLINE = 0x01u;
+static const uint PX_HAIR = 0x02u;
+static const uint PX_BACKGROUND = 0x03u;
+static const uint PX_COMPARAND = 0x0u;
+
+// Mask for px classification
+// Mask for group status and pixel type
+static const uint BITS2_MASK = 0x03u;
+
+// Group data status/ pixel type constants
+static const uint GROUP_DATA_PER_UINT = 0x04u;
+static const uint GROUP_DATA_PER_BYTE = 0x02u;
+
+
+// Constants for bounding box creation
+static const uint TOP_BOX = 100u;
+static const uint BOTTOM_BOX = 200u;
+
+// Constants for batch processing
+// 31 for zero based indexing
+static const uint INDEXES_PER_UINT = 31u;
+
+// Flag for group centroids buffer
+static const uint CLUSTER_AVAILABLE = 0x3E8u;
+
+// Max number of centroids a thread will check when merging
+// Max scan groups/ thread group size, which is 121
+// But we max it out at bits per uint * 4
+static const uint MAX_CENTROIDS = 128u;
+
+// Constants for thread blocking
+static const uint TB_CENTROIDS_MERGED = 0x969696u;
+static const uint TB_DEBUG_DRAW = 0x696969u;
+// Loop cap for thread barrier
+static const uint MEMORY_BARRIER_MAXOUT = 1000u;
+
+
+// Constants for head size
+// Based off 1 screen shot up close
+// and 1 taken at a far distance
+static const uint MIN_HEAD_SIZE = 5u;
+static const uint MAX_HEAD_SIZE = 50u;
+static const uint MAX_BODY_WIDTH = 350u;
 
 ///----------Structs-----------///
-
-// Hair cluster struct.
-// Hair cluster threshold.
-// if a new hair pixel is outside this threshold, it will be considered a new cluster.
-#define HAIR_CLUSTER_THRESHOLD uint( 0x0D )
-#define HAIR_MERGE_THRESHOLD  HAIR_CLUSTER_THRESHOLD
-struct HairCluster
-{
-    uint2 positions [ THREAD_GROUP_SIZE ]; //< Way overkill, but so be it.
-    uint2 averagePos;
-    uint clusterSize;
-    
-    inline uint2 GetPosition( int index )
-    {
-        return positions [ index ];
-    }
-    
-    inline uint2 GetAveragePos()
-    {
-        return averagePos;
-    }   
-    
-    inline bool IsMerged()
-    {
-        return averagePos.x == MERGED_FLAG & averagePos.y == MERGED_FLAG ? true : false;
-    }
-};
 
 
 // Define the Range structure for color limits.
@@ -109,31 +171,38 @@ struct ColorRange
 // ColorRanges to hold multiple ranges and the swap color.
 struct ColorRanges
 {
-    ColorRange ranges [ 0x0C ]; // Fixed maximum size.
-    uint numOfRanges;
-    float4 swapColor;    
-    uint safetyCheck; // Debugging purposes, we can use this here as well.
-    min16uint3 colorName [ 2 ]; // Debugging purposes, we can use this here as well.
+    ColorRange ranges [ MAX_RANGE_SIZE ]; //offset: 0 // Fixed maximum size 12.
+    unorm float4 swapColor; //offset: 288
+    uint numOfRanges; //offset: 304
+    uint2 padding0; //offset: 308
+    uint4 colorName; //offset: 316
+    uint4x3 padding1; //offset: 332
+	uint safetyCheck; //offset: 380
+    
     
     // Check if the struct has ranges
     inline bool HasRanges()
     {
-        return numOfRanges > 0 ? true : false;
+        return numOfRanges > 0;
     }
     
-    // Check if the name is the same as the compare name.
-    inline bool CheckName( min16uint3 compare [ 2 ])
+    // Note for anyone learning shaders at least for HLSL
+    // The gpu automatically points float4 swizzles for colors
+    // To RGBA, even if the texture is BGRA 
+    // Not knowing this screwed me over for a long time
+	inline bool IsInRange( const unorm float4 pixel, const uint rangeIndex )
     {
-        return !any( colorName [ 0 ] - compare [ 0 ] ) & !any( colorName [ 1 ]  - compare [ 1 ] );
+        ColorRange range = ranges [ rangeIndex ];
+        return pixel.r >= range.redRange.minimum && pixel.r <= range.redRange.maximum &&
+        pixel.g >= range.greenRange.minimum && pixel.g <= range.greenRange.maximum && 
+        pixel.b >= range.blueRange.minimum && pixel.b <= range.blueRange.maximum;
     }
     
-    // Because we are using a bitmap, it will be BGRA, z is red, x is blue, y is green.
-    inline bool IsInRange( float4 pixel, uint rangeIndex )
+    inline bool CheckNull()
     {
-
-        return ( pixel.z >= ranges [ rangeIndex ].redRange.minimum && pixel.x <= ranges [ rangeIndex ].redRange.maximum &&
-                pixel.y >= ranges [ rangeIndex ].greenRange.minimum && pixel.y <= ranges [ rangeIndex ].greenRange.maximum &&
-                pixel.x >= ranges [ rangeIndex ].blueRange.minimum && pixel.z <= ranges [ rangeIndex ].blueRange.maximum ) ? true : false;
+        return !any( swapColor ) && 
+        !any( colorName ) && 
+        numOfRanges == 0;
     }
     
     // Checks of the safety check value is the max int value.
@@ -142,276 +211,221 @@ struct ColorRanges
     {
         return safetyCheck == MAX_UINT;
     }
-};
+
+}; //size : 384
+
+
+
+
+struct BndBoxMM
+{
+    uint2 bbMin; //offset : 0
+    uint2 bbMax; //offset : 8     
+}; // size: 16
+
+
+// Struct for  holding global variables
+// For Detecting final player locations
+struct TargetFinder
+{
+    uint2 rightLowestPoint; //offset : 0
+    uint2 leftLowestPoint; //offset : 8
+    uint2 ySearchPlaneLane; //offset : 16
+    int leftReductionDegree; //offset : 24
+    int DegHairToRightLow; //offset : 28
+    int DegHairToLeftLow; //offset : 32
+    int distance; //offset : 36   
+}; //size : 40
+
 
 
 // Player position struct
 struct PlayerPosition
 {
-    uint2 headPosition;
-    uint2 bodyPosition;
-    uint4x2 boundingBox;
-};
+    uint2 headPosition; //offset : 0
+    uint2 bodyPosition; //offset : 8
+    uint4x2 boundingBox; //offset : 16
+}; //size : 48
 
-// PlayerPositions struct holds a max of 6 players.
-// Change according to the maximum number of players you want to detect.
+
+
+// PlayerPositions struct holds a max of 6 players
+// Change according to the maximum number of players you want to detect
 struct DetectedPlayers
 {
-    PlayerPosition players [ MAX_PLAYERS ];
-    uint playerCount;
-    
-        
-    ///----------------FOR-GLOBAL-SHARED-VARIABLES-----------------///
-    /// These 2 variables are for global variables.
-    /// They will only be accessed in PlayerPositionBuffer[1].
-    /// This is because there is only 1 actually needed DetectedPlayers struct for output.
-    // These 2 variables are needed globally for all threads.
-    uint GLOBAL_MERGE_FLAG;
-    uint UID_BASE_VALUE;
-    
-    uint safetyCheck; // Debugging purposes, we can use this here as well.
-    
-    
+    PlayerPosition players [ MAX_PLAYERS ]; //offset : 0
+	BndBoxMM scanBoxBB; //offset : 288
+	TargetFinder globals; //offset : 304
+    uint playerCount; //offset : 344 
+	uint centroidMergeFlag; //offset : 348
+	uint4 padding0; //offset : 352
+	uint3 padding1; //offset : 368
+    uint safetyCheck; //offset : 380 
+
     inline bool CheckAlignment()
     {
         return safetyCheck == MAX_UINT;
     }
-};
+}; //size : 384
 
-// Bounding box struct, and hair centroid struct.
-// position for the hair centroid.
-// min/max values for the bounding box.
-// unique id for merging.
-struct BoundingBox
-{
-    uint2 min;
-    uint2 max;
-    uint uniqueId;
-    uint linked;
-    
-    inline bool IsMerged()
-    {
-        return uniqueId == MERGED_FLAG;
-    }
-    
-    inline bool isLinked()
-    {
-        return linked;
-    }
-};
 
 
 struct HairCentroid
 {
-    uint2 position;
-    uint uniqueId;
-    uint linked;
+    uint4 outlinePos; //offset : 0
+    uint clusterSize; //offset : 16
+	uint allowance; //offset : 20
+    uint2 padding0; //offset : 24
     
-    inline bool IsMerged()
+    inline bool VerifyCentroid()
     {
-        return uniqueId == MERGED_FLAG;
-    }
+		return clusterSize > 5 && 
+        all( outlinePos.xz < SCAN_BOX_MAX.x ) && 
+        all( outlinePos.xz > SCAN_BOX_MIN.x ) &&
+        all( outlinePos.yw < SCAN_BOX_MAX.y ) && 
+        all( outlinePos.yw > SCAN_BOX_MIN.y );
+	}
     
-    inline bool isLinked()
+	inline bool CheckForMerge( const uint4 otherOutlinePos )
     {
-        return linked;
-    }
-};
+		return any( otherOutlinePos >= uint4( outlinePos - allowance ) ) && any( otherOutlinePos <= uint4( outlinePos + allowance ) );
+	}
+	
+}; // size: 32
 
-// GroupBoundingBoxDetails struct.
-// This is for when we merge all the details from the group shared memory, to the full texture.
-struct GroupDetails
+
+// Group data struct
+// Holds the group centroid data
+// each pixel( thread ) will also hold their status & pixel type
+// each thread will get half a byte(4 bits) for their status & pixel type
+// Status will be bits 0, 1 and pixel type will be bits 2, 3
+struct GroupData
 {
-    BoundingBox boundingBoxes [ MAX_PLAYERS ];
-    HairCentroid hairCentroids [ MAX_PLAYERS ];
-    uint safetyCheck; // Debugging purposes, we can use this here as well.
+    HairCentroid hairCentroid; //offset : 0
+	uint hasCluster; //offset : 32
+	uint3 padding0; //offset : 36
+	uint4x4 statusPxlType; //offset : 48 
+	uint3 padding2; //offset : 112
+	uint safetyCheck; //offset : 124
     
-    inline void GetHairCentroid( uint segmentPos, out HairCentroid hairCentroid )
-    {
-        hairCentroid.linked = hairCentroids [ segmentPos ].linked;
-        hairCentroid.position = hairCentroids [ segmentPos ].position;
-        hairCentroid.uniqueId = hairCentroids [ segmentPos ].uniqueId;
-    }
+	inline bool CheckForClusters()
+	{
+		return hasCluster == CLUSTER_AVAILABLE;
+	}
     
-    inline void GetBoundingBox( uint segmentPos, out BoundingBox boundingBox )
-    {
-        boundingBox.min = boundingBoxes [ segmentPos ].min;
-        boundingBox.max = boundingBoxes [ segmentPos ].max;
-        boundingBox.uniqueId = boundingBoxes [ segmentPos ].uniqueId;
-        boundingBox.linked = boundingBoxes [ segmentPos ].linked;
-
-    }
-    
-    inline void GetAllHairCentroids( out HairCentroid groupHairCentroids [ MAX_PLAYERS ] )
-    {
-        groupHairCentroids = hairCentroids;
-    }
-    
-    inline void GetAllBoundingBoxs( out BoundingBox groupBoundingBoxes [ MAX_PLAYERS ] )
-    {
-        groupBoundingBoxes = boundingBoxes;
-    }
-    
-    inline void GetAllGroupDetails( out BoundingBox groupBoundingBoxes [ MAX_PLAYERS ], out HairCentroid groupHairCentroids [ MAX_PLAYERS ] )
-    {
-        groupBoundingBoxes = boundingBoxes;
-        groupHairCentroids = hairCentroids;
-    }  
-           
     inline bool CheckAlignment()
     {
         return safetyCheck == MAX_UINT;
     }
+}; // size: 128
+
+
+// Hair cluster struct
+// We only really need 1 position since we are verifying
+// The positions are inside an outline
+// This way we put a extra check in place
+struct HairCluster
+{
+    uint4 outlinePos;
+	uint clusterSize;
+	uint2 padding0;
+	uint safetyCheck;
+    
+	inline bool VerifyOutline()
+	{
+		return all( outlinePos != MAX_UINT ) && all( outlinePos != MIN_UINT );
+	}
+    
+	inline bool VerifyCluster()
+	{
+		return all( outlinePos != MAX_UINT ) && all( outlinePos != MIN_UINT ) && ( clusterSize > 5 && clusterSize < THREAD_GROUP_SIZE );
+	}
 };
+
+
+//struct DebugCentroidMerge
+//{
+//	HairCentroid hairCentroids [ MAX_PLAYERS ]; //offset : 0
+//	uint4x3 padding0; //offset : 192
+//	uint2 padding1; //offset : 240
+//	uint hasCluster; //offset : 248
+//	uint safetyCheck; //offset : 252
+	
+    
+//	inline bool CheckAlignment()
+//	{
+//		return safetyCheck == MAX_UINT;
+//	}
+//}; // size: 256
+
+
 
 ///----------Buffers-----------///
 
-// UAV buffer for the image we can R/W on all threads simultaneously with a uav buffer.
-// We are using a typed load as the texture is DXGI_FORMAT_B8G8R8A8_UNORM, it could be DXGI_FORMAT_R8G8B8X8_UNORM as well, we are using a float4 regardless.
-// This is also why we checked for typed load support in the main program, and we arent using a simple float4 pixel = UavBuffer[ThreadId.xy] here.
-RWTexture2D<unorm float4> UavBuffer : register( u0 );
+// UAV buffers are are unordered access, in simple terms
+// Think of them as regular memory, any UAV buffer marked 'RW'
+// Can simultaneously be read / written to by all threads
+// This doesnt stop race conditions! but this is why we mark
+// Any buffer being written to as globally coherent
+// This helps the compiler force memory alignment I.E
+// Barriers to help with race conditions
+// We also use our own barriers when necessary
 
-// Buffer for precomputed color ranges.
+
+// We are using a typed load as the texture is DXGI_FORMAT_B8G8R8A8_UNORM, we are using a unorm float4.
+// This is also why we checked for typed load support in the main program.
+globallycoherent RWTexture2D<unorm float4> UavBuffer : register( u0 );
+
+// Buffer for precomputed color ranges
+// NUM_COLOR_RANGES is our max index
 RWStructuredBuffer<ColorRanges> ColorRangeBuffer : register( u1 );
 
-// Buffer for the group bounding box details.
-RWStructuredBuffer<GroupDetails> GroupDetailsBuffer : register( u2 );
+// Buffer for group centroids
+// MAX_SCAN_BOX_GROUPS is our max index
+// ACTUAL_SCAN_BOX_GROUPS is our actual max index
+globallycoherent RWStructuredBuffer<GroupData> GroupDataBuffer : register( u2 );
 
-// Our resulting buffer for player positions.
-// PlayerPositionBuffer[0] is our output data.
-// PlayerPositionBuffer[1] is for global variables
-RWStructuredBuffer<DetectedPlayers> PlayerPositionBuffer : register( u3 );
+///-----------------ScanBoxData------------------///
+// Classifications are packed: 16 pixels per uint    
+// [31:30][29:28]...[3:2][1:0] = 16 pixels        
+// Each pixel uses 2 bits:                                                           
+// 01 = Outline                                     
+// 10 = Hair                                       
+// 11 = Background 
+
+//|----[P0][P1][P2]...[P14][P15]| = uint0
+//|----[P16][P17]...[P30][P31]| = uint1
+//|----[...continues...]
+// Buffer for the scan box data
+// MAX_SCAN_BOX_MATRIX_SIZE is our max index
+// MAX_SCAN_BOX_BUFFER_SIZE is our actual max index 
+globallycoherent RWByteAddressBuffer ScanBoxBuffer : register( u3 );
+
+// Our resulting buffer for player positions
+// PlayerPositionBuffer[0] is our only struct
+globallycoherent RWStructuredBuffer<DetectedPlayers> PlayerPositionBuffer : register( u4 );
+
+
+
+//globallycoherent RWStructuredBuffer<DebugCentroidMerge> ClusterMergeDebug : register( u6 );
+
+
 
 ///----------GroupSharedData-----------///
 
-// Thread group shared matrix.
-// Reduces the amount of memory accesses.
-struct GroupSharedMaxtrix
-{
-    uint row0 [ X_THREADGROUP ];
-    uint row1 [ X_THREADGROUP ];
-    uint row2 [ X_THREADGROUP ];
-    uint row3 [ X_THREADGROUP ];
-};
-groupshared GroupSharedMaxtrix localSharedMatrix;
+groupshared HairCentroid gmMergedClusters [ MAX_PLAYERS ];
+groupshared uint gmValidCount;
 
-// Fill modified flag, for outline connection, and flood fill.
-// We use an int as to be able to safetly use interlocked operations on this.
-groupshared uint fillModified; //< Set to 1 to start the flood fill.
+// Hair position data
+groupshared HairCluster gmHairCluster;
 
-// Group shared min and max values for bounding box calculation.
-// Set to six as we expect there could only be 6 targets located in a thread group.
-// That is still overkill, but it is better to have more than less.
-groupshared uint2 groupMin [ MAX_PLAYERS ];
-groupshared uint2 groupMax [ MAX_PLAYERS ];
+// Used when group thread 0,0 checks for errors
+groupshared uint gmGroupStatus = 0u;
 
-// Group shared bounding box merge threshold.
-#define BB_MERGE_THRESHOLD uint( 0x05 )
+groupshared int gmGroupDataIndex = -10;
 
-// Hair position data.
-groupshared HairCluster hairClusters [ MAX_PLAYERS ];
-groupshared uint hairClusterCount;
-
-
-
-///------------Neighborhood-Scans------------///
-// We are using a 3x3 neighborhood scan
-//#define SCAN_TOP_LEFT int2( -1, -1 )
-//#define SCAN_TOP int2( 0, -1 )
-//#define SCAN_TOP_RIGHT int2( 1, -1 )
-//#define SCAN_LEFT int2( -1, 0 )
-//#define SCAN_MIDDLE int2( 0, 0 )
-//#define SCAN_RIGHT int2( 1, 0 )
-//#define SCAN_BOTTOM_LEFT int2( -1, 1 )
-//#define SCAN_BOTTOM int2( 0, 1 )
-//#define SCAN_BOTTOM_RIGHT int2( 1, 1 )
-
-#define MATRIX_TYPE_FILL0 uint( 0x0 )
-#define MATRIX_TYPE_FILL1 uint( 0x1 )
-#define MATRIX_TYPE_SCAN uint( 0x2 )
-
-groupshared const int2 SharedScanMatrix [ 3 ] [ 8 ] [ 3 ] =
-{
-    // fillMatrix1
-    {
-        { int2( -1, -1 ), int2( 0, -1 ), int2( 1, -1 ) },
-        { int2( 1, -1 ), int2( 1, 0 ), int2( 1, 1 ) },
-        { int2( 0, -1 ), int2( 1, -1 ), int2( 1, 0 ) },
-        { int2( -1, 1 ), int2( -1, 0 ), int2( 0, -1 ) },
-        { int2( -1, 1 ), int2( 0, 1 ), int2( 1, 1 ) },
-        { int2( 0, 1 ), int2( -1, 0 ), int2( 0, -1 ) },
-        { int2( 0, 1 ), int2( 1, 0 ), int2( 1, -1 ) },
-        { int2( 0, 0 ), int2( 0, 0 ), int2( 0, 0 ) } // Dummy data.
-    },
-    // fillMatrix2
-    {                                   // Dummy data.
-        { int2( -1, -1 ), int2( 0, -1 ), int2( 0, 0 ) },
-        { int2( 1, -1 ), int2( 1, 0 ), int2( 0, 0 ) },
-        { int2( 1, 1 ), int2( 0, 1 ), int2( 0, 0 ) },
-        { int2( -1, 1 ), int2( -1, 0 ), int2( 0, 0 ) },
-        { int2( -1, -1 ), int2( 1, 0 ), int2( 0, 0 ) },
-        { int2( 0, 0 ), int2( 0, 0 ), int2( 0, 0 ) }, // Dummy data.
-        { int2( 0, 0 ), int2( 0, 0 ), int2( 0, 0 ) }, // Dummy data.
-        { int2( 0, 0 ), int2( 0, 0 ), int2( 0, 0 ) } // Dummy data.
-    },
-    // scanMatrix
-    {
-        { int2( -1, -1 ), int2( 0, -1 ), int2( 1, -1 ) },
-        { int2( 1, -1 ), int2( 1, 0 ), int2( 1, 1 ) },
-        { int2( 0, -1 ), int2( 1, -1 ), int2( 1, 0 ) },
-        { int2( -1, 1 ), int2( -1, 0 ), int2( 0, -1 ) },
-        { int2( -1, 1 ), int2( 0, 1 ), int2( 1, 1 ) },
-        { int2( 0, 1 ), int2( -1, 0 ), int2( 0, -1 ) },
-        { int2( 0, 1 ), int2( 1, 0 ), int2( 1, -1 ) },
-        { int2( 0, -1 ), int2( -1, 0 ), int2( -1, 1 ) }
-    }
-};
-
-///------------Pixel-Types------------///
-// We use these for the local matrix instead of actual pixel colors.
-// This is to reduce the computation time.
-#define PX_OUTLINE uint( ( 0x01 << 0x01 ) ) 
-#define PX_HAIR uint( ( 0x01 << 0x02 ) ) 
-#define PX_SKIN uint( ( 0x01 << 0x03 ) ) 
-#define PX_FLOODFILL uint( ( 0x01 << 0x04 ) )
-#define PX_BACKGROUND uint( ( 0x01 << 0x05 ) )
-
-///------------MACROS-------------///
-
-// Roll right macro.
-#define ROR( value, shift ) ( ( ( value >> shift ) | (value << ( 0x020 - shift ) ) ) ) 
-
-// Atomic macros
-#define ATOMIC_EXCHANGE_UINT2(target, source, dummy)    \
-[unroll(1)]                                             \
-do {                                                    \
-    InterlockedExchange((target).x, (source).x, dummy); \
-    InterlockedExchange((target).y, (source).y, dummy); \
-} while (0)
-
-// We are okay with making 4 dummy variables on the stack.
-// this macro is used like once or twice and we dont even see the added stack variables.. only in assembly.
-#define ATOMIC_EXCHANGE_UINT4X2(target, source, dummy )        \
-[unroll(1)]                                                    \
-do {                                                           \
-    ATOMIC_EXCHANGE_UINT2((target[0]), (source[0]), dummy);    \
-    ATOMIC_EXCHANGE_UINT2((target[1]), (source[1]), dummy);    \
-    ATOMIC_EXCHANGE_UINT2((target[2]), (source[2]), dummy);    \
-    ATOMIC_EXCHANGE_UINT2((target[3]), (source[3]), dummy);    \
-} while (0)
-
-#define ATOMIC_MIN_UINT2(target, source)    \
-[unroll(1)]                                 \
-do {                                        \
-    InterlockedMin((target).x, (source).x); \
-    InterlockedMin((target).y, (source).y); \
-} while (0)
-
-#define ATOMIC_MAX_UINT2(target, source)    \
-[unroll(1)]                                 \
-do {                                        \
-    InterlockedMax((target).x, (source).x); \
-    InterlockedMax((target).y, (source).y); \
-} while (0)
+// Dummy values for atomic operations
+static uint DUMMY_UINT = 0u;
+static uint DUMMY_COMPARAND = 0xF1F1F1F1u;
 
 

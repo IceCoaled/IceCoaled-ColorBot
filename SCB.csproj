@@ -4,7 +4,7 @@
   <PropertyGroup>
 	<Authors>IceCoaled</Authors>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net9.0-windows10.0.17763.0</TargetFramework>
+    <TargetFramework>net9.0-windows10.0.26100.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
@@ -19,7 +19,8 @@
     <SignAssembly>False</SignAssembly>
     <GenerateDocumentationFile>False</GenerateDocumentationFile>
     <DocumentationFile>D:\SCB\DocumentationFile.xml</DocumentationFile>
-    <Description>POC IceCoaled ColorBot</Description>	 
+    <Description>POC IceCoaled ColorBot</Description>
+    <SupportedOSPlatformVersion>10.0.26100.0</SupportedOSPlatformVersion>	 
 </PropertyGroup>
 
 
@@ -44,6 +45,11 @@
 		<WarningLevel>4</WarningLevel>
 		<FileAlignment>4096</FileAlignment>
 	</PropertyGroup>
+
+	<ItemGroup>
+	  <None Remove="Shader\dgjicdrp.krb~" />
+	  <None Remove="Shader\oe3edoun.5wt~" />
+	</ItemGroup>
 
   <ItemGroup>
     <Content Include="Ice-coaled.ico" />
@@ -86,10 +92,18 @@
   </ItemGroup>
 
 	<ItemGroup>
+		<HLSLI Include="ShaderFunctions.hlsli">
+			<ShaderType>Compute</ShaderType>
+			<ShaderModel>5.0</ShaderModel>
+		</HLSLI>
+		<HLSLI Include="ShaderDefines.hlsli">
+			<ShaderType>Compute</ShaderType>
+			<ShaderModel>5.0</ShaderModel>
+		</HLSLI>
 		<HLSL Include="GenericShader.hlsl">
 			<ShaderType>Compute</ShaderType>
 			<EntryPointName>main</EntryPointName>
-			<ShaderModel>5.1</ShaderModel>
+			<ShaderModel>5.0</ShaderModel>
 		</HLSL>
 	</ItemGroup>
 </Project>

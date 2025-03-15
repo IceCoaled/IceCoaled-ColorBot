@@ -1,195 +1,203 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace SCB.Atomics
 {
     using ASC = AtomicSupportClass;
 
-    sealed unsafe partial class AtomicInt32( int value ) : UnsafeAtomicNumerics<int>( value )
+
+#pragma warning disable CS9107
+#pragma warning disable CS0660
+#pragma warning disable CS0661
+
+    unsafe sealed class AtomicInt32( int value ) : AtomicNumericsBase<int>( value ), IAtomicBaseOperations<int>
     {
-        private bool disposed = false;
-        public Dictionary<ASC.AtomicOps, Func<int, int, int>> SignedArithmeticOperations { get; set; } = ASC.ArithmeticOperations<int>();
-        public Dictionary<ASC.AtomicOps, Func<int, int, int>> SignedBitwiseOperations { get; set; } = ASC.Signed32BitwiseOperations();
-        public Dictionary<ASC.AtomicOps, Func<int, int, int>> SignedShiftOperations { get; set; } = ASC.Signed32ShiftOperations();
+        ///-------Interface-methods-Start------------///
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public int Increment( in int value )
+        {
+            if ( IsExtended )
+            {
+                return ASC.LongToInt( Interlocked.Add( ref StorageEx->lAtomic, value ) );
+            } else
+            {
+                return ASC.LongToInt( Interlocked.Add( ref Storage->lAtomic, value ) );
+            }
+        }
 
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int Add( int value )
+        public int Decrement( in int value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Add, false, value );
+            if ( IsExtended )
+            {
+                return ASC.LongToInt( Interlocked.Add( ref StorageEx->lAtomic, -value ) );
+            } else
+            {
+                return ASC.LongToInt( Interlocked.Add( ref Storage->lAtomic, -value ) );
+            }
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int Subtract( int value )
+        public int CompareExchange( in int value, in int comparand )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Subtract, false, value );
+            if ( IsExtended )
+            {
+                return ASC.LongToInt( Interlocked.CompareExchange( ref StorageEx->lAtomic, value, comparand ) );
+            } else
+            {
+                return ASC.LongToInt( Interlocked.CompareExchange( ref Storage->lAtomic, value, comparand ) );
+            }
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int Multiply( int value )
+        public int Read()
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Multiply, false, value );
+            if ( IsExtended && RefCount > ContentionThreshold )
+            {
+                using var sL = ScopeLock();
+                return ASC.LongToInt( Unsafe.Read<int>( &StorageEx->lAtomic ) );
+            } else if ( IsExtended )
+            {
+                return ASC.LongToInt( Interlocked.Read( ref StorageEx->lAtomic ) );
+            } else
+            {
+                return ASC.LongToInt( Interlocked.Read( ref Storage->lAtomic ) );
+            }
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int Divide( int value )
+        public void Write( in int value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Divide, false, value );
+            if ( IsExtended && RefCount > ContentionThreshold )
+            {
+                using var sL = ScopeLock();
+                Unsafe.Write( &StorageEx->lAtomic, ASC.IntToLong( value ) );
+            } else if ( IsExtended )
+            {
+                _ = Interlocked.Exchange( ref StorageEx->lAtomic, value );
+            } else
+            {
+                _ = Interlocked.Exchange( ref Storage->lAtomic, value );
+            }
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int Modulus( int value )
+        public int Supplant( [Optional] in int value, [Optional] in int rsValue, ASC.AtomicOperation aO )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Modulus, false, value );
+            if ( aO == ASC.AtomicOperation.BitShiftL || aO == ASC.AtomicOperation.BitShiftR ||
+                aO == ASC.AtomicOperation.RotateLeft || aO == ASC.AtomicOperation.RotateRight )
+            {
+                return int.MaxValue;
+            }
+
+            int result = aO switch
+            {
+                ASC.AtomicOperation.Addition => ASC.Add( Read(), value ),
+                ASC.AtomicOperation.Subtraction => ASC.Subtract( Read(), value ),
+                ASC.AtomicOperation.Multiplication => ASC.Multiply( Read(), value ),
+                ASC.AtomicOperation.Division => ASC.Divide( Read(), value ),
+                ASC.AtomicOperation.Modulus => ASC.Modulus( Read(), value ),
+                ASC.AtomicOperation.BitwiseAnd => ASC.BitwiseAnd( Read(), value ),
+                ASC.AtomicOperation.BitwiseOr => ASC.BitwiseOr( Read(), value ),
+                ASC.AtomicOperation.BitwiseXor => ASC.BitwiseXor( Read(), value ),
+                ASC.AtomicOperation.BitwiseNot => ASC.BitwiseNot( Read() ),
+                _ => throw new ArgumentOutOfRangeException( nameof( aO ) ),
+            };
+
+            Write( result );
+            return result;
         }
 
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int Max( int value )
-        {
-            return int.Max( ReadInt32(), value );
-        }
+        ///------------Interface-methods-End--------------/// 
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int Min( int value )
+        public ScopedAtomicRef<AtomicInt32, int> GetScopedReference()
         {
-            return int.Min( ReadInt32(), value );
+            return new ScopedAtomicRef<AtomicInt32, int>( this );
         }
 
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int And( int value )
-        {
-            return PerformBitwiseOperation( ASC.AtomicOps.And, false, value );
-        }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int Or( int value )
+        public int Add( in int value )
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.Or, false, value );
+            return Increment( value );
         }
 
+
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int Xor( int value )
+        public int Subtract( in int value )
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.Xor, false, value );
+            return Decrement( value );
         }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public int Multiply( in int value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.Multiplication );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public int Divide( in int value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.Division );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public int Modulus( in int value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.Modulus );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public int Max( in int value )
+        {
+            return int.Max( Read(), value );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public int Min( in int value )
+        {
+            return int.Min( Read(), value );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public int And( in int value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.BitwiseAnd );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public int Or( in int value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.BitwiseOr );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public int Xor( in int value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.BitwiseXor );
+        }
+
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public int Not()
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.Not, false, 0 );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int LeftShift( int value )
-        {
-            return PerformShiftOperation( ASC.AtomicOps.LeftShift, false, value );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int RightShift( int value )
-        {
-            return PerformShiftOperation( ASC.AtomicOps.RightShift, false, value );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int RotateLeft( int value )
-        {
-            return PerformShiftOperation( ASC.AtomicOps.RotateLeft, false, value );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public int RotateRight( int value )
-        {
-            return PerformShiftOperation( ASC.AtomicOps.RotateRight, false, value );
-        }
-
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private int PerformArithmeticOperation( ASC.AtomicOps op, bool overload, int value )
-        {
-            if ( !SignedArithmeticOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            int result = operation( ReadInt32(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private int PerformBitwiseOperation( ASC.AtomicOps op, bool overload, int value )
-        {
-            if ( !SignedBitwiseOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            int result = operation( ReadInt32(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private int PerformShiftOperation( ASC.AtomicOps op, bool overload, int value )
-        {
-            if ( !SignedShiftOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            int result = operation( ReadInt32(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
-        }
-
-
-
-        ~AtomicInt32()
-        {
-            Dispose( false );
-        }
-
-        protected override void Dispose( bool disposing )
-        {
-            if ( !disposed &&
-                disposing )
-            {
-                base.Dispose( disposing );
-            }
-            disposed = true;
-        }
-
-        // Object overrides
-
-        public override bool Equals( object? obj )
-        {
-            if ( obj is AtomicInt32 atomic )
-            {
-                return ReadInt32() == atomic.ReadInt32() &&
-                    GetHashCode() == atomic.GetHashCode();
-            }
-            return false;
-        }
-
-        public override int GetHashCode()
-        {
-            return base.GetHashCode();
+            return Supplant( aO: ASC.AtomicOperation.BitwiseNot );
         }
 
 
         // Overload operators
+
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static implicit operator AtomicInt32( int value )
         {
@@ -199,298 +207,284 @@ namespace SCB.Atomics
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( AtomicInt32 atomic, int value )
         {
-            return atomic.ReadInt32() == value;
+            return atomic.Read() == value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( AtomicInt32 atomic, int value )
         {
-            return atomic.ReadInt32() != value;
+            return atomic.Read() != value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return atomic1.Equals( atomic2 );
+            return atomic1.Read() == atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return !atomic1.Equals( atomic2 );
+            return atomic1.Read() != atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( int value, AtomicInt32 atomic )
         {
-            return atomic.ReadInt32() == value;
+            return value == atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( int value, AtomicInt32 atomic )
         {
-            return atomic.ReadInt32() != value;
+            return value != atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( AtomicInt32 atomic, int value )
         {
-            return atomic.ReadInt32() > value;
+            return atomic.Read() > value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( AtomicInt32 atomic, int value )
         {
-            return atomic.ReadInt32() < value;
+            return atomic.Read() < value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( int value, AtomicInt32 atomic )
         {
-            return value > atomic.ReadInt32();
+            return value > atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( int value, AtomicInt32 atomic )
         {
-            return value < atomic.ReadInt32();
+            return value < atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return atomic1.ReadInt32() > atomic2.ReadInt32();
+            return atomic1.Read() > atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return atomic1.ReadInt32() < atomic2.ReadInt32();
+            return atomic1.Read() < atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( AtomicInt32 atomic, int value )
         {
-            return atomic.ReadInt32() >= value;
+            return atomic.Read() >= value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( AtomicInt32 atomic, int value )
         {
-            return atomic.ReadInt32() <= value;
+            return atomic.Read() <= value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( int value, AtomicInt32 atomic )
         {
-            return value >= atomic.ReadInt32();
+            return value >= atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( int value, AtomicInt32 atomic )
         {
-            return value <= atomic.ReadInt32();
+            return value <= atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return atomic1.ReadInt32() >= atomic2.ReadInt32();
+            return atomic1.Read() >= atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return atomic1.ReadInt32() <= atomic2.ReadInt32();
+            return atomic1.Read() <= atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator +( AtomicInt32 atomic, int value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Add, true, value );
+            return atomic.Read() + value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator +( int value, AtomicInt32 atomic )
         {
-            return value + atomic.ReadInt32();
+            return value + atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator +( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return atomic1.PerformArithmeticOperation( ASC.AtomicOps.Add, true, atomic2.ReadInt32() );
+            return atomic1.Read() + atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator -( AtomicInt32 atomic, int value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Subtract, true, value );
+            return atomic.Read() - value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator -( int value, AtomicInt32 atomic )
         {
-            return value - atomic.ReadInt32();
+            return value - atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator -( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return atomic1.PerformArithmeticOperation( ASC.AtomicOps.Subtract, true, atomic2.ReadInt32() );
+            return atomic1.Read() - atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator *( AtomicInt32 atomic, int value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Multiply, true, value );
+            return atomic.Read() * value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator *( int value, AtomicInt32 atomic )
         {
-            return value * atomic.ReadInt32();
+            return value * atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator *( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return atomic1.PerformArithmeticOperation( ASC.AtomicOps.Multiply, true, atomic2.ReadInt32() );
+            return atomic1.Read() * atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator /( AtomicInt32 atomic, int value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Divide, true, value );
+            return atomic.Read() / value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator /( int value, AtomicInt32 atomic )
         {
-            return value / atomic.ReadInt32();
+            return value / atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator /( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return atomic1.PerformArithmeticOperation( ASC.AtomicOps.Divide, true, atomic2.ReadInt32() );
+            return atomic1.Read() / atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator %( AtomicInt32 atomic, int value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Modulus, true, value );
+            return atomic.Read() % value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator %( int value, AtomicInt32 atomic )
         {
-            return value % atomic.ReadInt32();
+            return value % atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator %( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return atomic1.PerformArithmeticOperation( ASC.AtomicOps.Modulus, true, atomic2.ReadInt32() );
+            return atomic1.Read() % atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator &( AtomicInt32 atomic, int value )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.And, true, value );
+            return atomic.Read() & value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator &( int value, AtomicInt32 atomic )
         {
-            return value & atomic.ReadInt32();
+            return value & atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator &( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return atomic1.PerformBitwiseOperation( ASC.AtomicOps.And, true, atomic2.ReadInt32() );
+            return atomic1.Read() & atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator |( AtomicInt32 atomic, int value )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.Or, true, value );
+            return atomic.Read() | value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator |( int value, AtomicInt32 atomic )
         {
-            return value | atomic.ReadInt32();
+            return value | atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator |( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return atomic1.PerformBitwiseOperation( ASC.AtomicOps.Or, true, atomic2.ReadInt32() );
+            return atomic1.Read() | atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator ^( AtomicInt32 atomic, int value )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.Xor, true, value );
+            return atomic.Read() ^ value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator ^( int value, AtomicInt32 atomic )
         {
-            return value ^ atomic.ReadInt32();
+            return value ^ atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator ^( AtomicInt32 atomic1, AtomicInt32 atomic2 )
         {
-            return atomic1.PerformBitwiseOperation( ASC.AtomicOps.Xor, true, atomic2.ReadInt32() );
+            return atomic1.Read() ^ atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator ~( AtomicInt32 atomic )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.Not, true, 0 );
+            return atomic.Not();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator <<( AtomicInt32 atomic, int value )
         {
-            return atomic.PerformShiftOperation( ASC.AtomicOps.LeftShift, true, value );
+            return atomic.Read() << value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static int operator >>( AtomicInt32 atomic, int value )
         {
-            return atomic.PerformShiftOperation( ASC.AtomicOps.RightShift, true, value );
+            return atomic.Read() >> value;
         }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static int operator <<( AtomicInt32 atomic1, AtomicInt32 atomic2 )
-        {
-            return atomic1.PerformShiftOperation( ASC.AtomicOps.LeftShift, true, atomic2.ReadInt32() );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static int operator >>( AtomicInt32 atomic1, AtomicInt32 atomic2 )
-        {
-            return atomic1.PerformShiftOperation( ASC.AtomicOps.RightShift, true, atomic2.ReadInt32() );
-        }
-
-
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static AtomicInt32 operator ++( AtomicInt32 atomic )
         {
-            atomic.Increment();
+            atomic.Increment( 1 );
             return atomic;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static AtomicInt32 operator --( AtomicInt32 atomic )
         {
-            atomic.Decrement();
+            atomic.Decrement( 1 );
             return atomic;
         }
     }
@@ -499,187 +493,201 @@ namespace SCB.Atomics
 
 
 
-    sealed unsafe partial class AtomicUint32( uint value ) : UnsafeAtomicNumerics<uint>( value )
+    sealed unsafe class AtomicUint32( uint value ) : AtomicNumericsBase<uint>( value ), IAtomicBaseOperations<uint>
     {
-        private bool disposed = false;
-        public Dictionary<ASC.AtomicOps, Func<uint, uint, uint>> UnsignedArithmeticOperations { get; set; } = ASC.ArithmeticOperations<uint>();
-        public Dictionary<ASC.AtomicOps, Func<uint, uint, uint>> UnsignedBitwiseOperations { get; set; } = ASC.Unsigned32BitwiseOperations();
-        public Dictionary<ASC.AtomicOps, Func<uint, int, uint>> UnsignedShiftOperations { get; set; } = ASC.Unsigned32ShiftOperations();
+        ///-------Interface-methods-Start------------///
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public uint Increment( in uint value )
+        {
+            if ( IsExtended )
+            {
+                return ASC.UlongToUint( Interlocked.Add( ref StorageEx->ulAtomic, value ) );
+            } else
+            {
+                return ASC.UlongToUint( Interlocked.Add( ref Storage->ulAtomic, value ) );
+            }
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public uint Decrement( in uint value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.Subtraction );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+
+        public uint CompareExchange( in uint value, in uint comparand )
+        {
+            if ( IsExtended )
+            {
+                return ASC.UlongToUint( Interlocked.CompareExchange( ref StorageEx->ulAtomic, value, comparand ) );
+            } else
+            {
+                return ASC.UlongToUint( Interlocked.CompareExchange( ref Storage->ulAtomic, value, comparand ) );
+            }
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public uint Read()
+        {
+            if ( IsExtended && RefCount > ContentionThreshold )
+            {
+                using var sL = ScopeLock();
+                return ASC.UlongToUint( Unsafe.Read<ulong>( &StorageEx->ulAtomic ) );
+            } else if ( IsExtended )
+            {
+                return ASC.UlongToUint( Interlocked.Read( ref StorageEx->ulAtomic ) );
+            } else
+            {
+                return ASC.UlongToUint( Interlocked.Read( ref Storage->ulAtomic ) );
+            }
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public void Write( in uint value )
+        {
+            if ( IsExtended && RefCount > ContentionThreshold )
+            {
+                using var sL = ScopeLock();
+                Unsafe.Write( &StorageEx->ulAtomic, value );
+            } else if ( IsExtended )
+            {
+                _ = Interlocked.Exchange( ref StorageEx->ulAtomic, value );
+            } else
+            {
+                _ = Interlocked.Exchange( ref Storage->ulAtomic, value );
+            }
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public uint Supplant( [Optional] in uint value, [Optional] in int rsValue, ASC.AtomicOperation aO )
+        {
+            uint result = aO switch
+            {
+                ASC.AtomicOperation.Addition => ASC.Add( Read(), value ),
+                ASC.AtomicOperation.Subtraction => ASC.Subtract( Read(), value ),
+                ASC.AtomicOperation.Multiplication => ASC.Multiply( Read(), value ),
+                ASC.AtomicOperation.Division => ASC.Divide( Read(), value ),
+                ASC.AtomicOperation.Modulus => ASC.Modulus( Read(), value ),
+                ASC.AtomicOperation.BitwiseAnd => ASC.BitwiseAnd( Read(), value ),
+                ASC.AtomicOperation.BitwiseOr => ASC.BitwiseOr( Read(), value ),
+                ASC.AtomicOperation.BitwiseXor => ASC.BitwiseXor( Read(), value ),
+                ASC.AtomicOperation.BitwiseNot => ASC.BitwiseNot( Read() ),
+                ASC.AtomicOperation.BitShiftL => ASC.LeftShift( Read(), rsValue ),
+                ASC.AtomicOperation.BitShiftR => ASC.RightShift( Read(), rsValue ),
+                ASC.AtomicOperation.RotateLeft => ASC.RotateLeft( Read(), rsValue ),
+                ASC.AtomicOperation.RotateRight => ASC.RotateRight( Read(), rsValue ),
+                _ => throw new ArgumentOutOfRangeException( nameof( aO ) ),
+            };
+
+            Write( result );
+            return result;
+        }
+
+
+
+        ///------------Interface-methods-End--------------///
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public ScopedAtomicRef<AtomicUint32, uint> GetScopedReference()
+        {
+            return new ScopedAtomicRef<AtomicUint32, uint>( this );
+        }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public uint Add( uint value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Add, false, value );
+            return Increment( value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public uint Subtract( uint value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Subtract, false, value );
+            return Decrement( value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public uint Multiply( uint value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Multiply, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.Multiplication );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public uint Divide( uint value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Divide, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.Division );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public uint Modulus( uint value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Modulus, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.Modulus );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public uint Max( uint value )
         {
-            return uint.Max( ReadUint32(), value );
+            return uint.Max( Read(), value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public uint Min( uint value )
         {
-            return uint.Min( ReadUint32(), value );
+            return uint.Min( Read(), value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public uint And( uint value )
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.And, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.BitwiseAnd );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public uint Or( uint value )
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.Or, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.BitwiseOr );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public uint Xor( uint value )
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.Xor, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.BitwiseXor );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public uint Not()
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.Not, false, 0 );
+            return Supplant( aO: ASC.AtomicOperation.BitwiseNot );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public uint LeftShift( int value )
         {
-            return PerformShiftOperation( ASC.AtomicOps.LeftShift, false, value );
+            return Supplant( rsValue: value, aO: ASC.AtomicOperation.BitShiftL );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public uint RightShift( int value )
         {
-            return PerformShiftOperation( ASC.AtomicOps.RightShift, false, value );
+            return Supplant( rsValue: value, aO: ASC.AtomicOperation.BitShiftR );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public uint RotateLeft( int value )
+        public uint RightRotate( int value )
         {
-            return PerformShiftOperation( ASC.AtomicOps.RotateLeft, false, value );
+            return Supplant( rsValue: value, aO: ASC.AtomicOperation.RotateRight );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public uint RotateRight( int value )
+        public uint LeftRotate( int value )
         {
-            return PerformShiftOperation( ASC.AtomicOps.RotateRight, false, value );
+            return Supplant( rsValue: value, aO: ASC.AtomicOperation.RotateLeft );
         }
 
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private uint PerformArithmeticOperation( ASC.AtomicOps op, bool overload, uint value )
-        {
-            if ( !UnsignedArithmeticOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            uint result = operation( ReadUint32(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private uint PerformBitwiseOperation( ASC.AtomicOps op, bool overload, uint value )
-        {
-            if ( !UnsignedBitwiseOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            uint result = operation( ReadUint32(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private uint PerformShiftOperation( ASC.AtomicOps op, bool overload, int value )
-        {
-            if ( !UnsignedShiftOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            uint result = operation( ReadUint32(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
-        }
-
-        ~AtomicUint32()
-        {
-            Dispose( false );
-        }
-
-        protected override void Dispose( bool disposing )
-        {
-            if ( !disposed &&
-                disposing )
-            {
-                base.Dispose( disposing );
-            }
-            disposed = true;
-        }
-
-        // Object overrides
-
-        public override bool Equals( object? obj )
-        {
-            if ( obj is AtomicUint32 atomic )
-            {
-                return ReadUint32() == atomic.ReadUint32() &&
-                    GetHashCode() == atomic.GetHashCode();
-            }
-            return false;
-        }
-
-        public override int GetHashCode()
-        {
-            return base.GetHashCode();
-        }
 
         // Overload operators
+
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static implicit operator AtomicUint32( uint value )
         {
@@ -689,272 +697,290 @@ namespace SCB.Atomics
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( AtomicUint32 atomic, uint value )
         {
-            return atomic.ReadUint32() == value;
+            return atomic.Read() == value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( AtomicUint32 atomic, uint value )
         {
-            return atomic.ReadUint32() != value;
+            return atomic.Read() != value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( AtomicUint32 atomic1, AtomicUint32 atomic2 )
         {
-            return atomic1.Equals( atomic2 );
+            return atomic1.Read() == atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( AtomicUint32 atomic1, AtomicUint32 atomic2 )
         {
-            return !atomic1.Equals( atomic2 );
+            return atomic1.Read() != atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( uint value, AtomicUint32 atomic )
         {
-            return atomic.ReadUint32() == value;
+            return value == atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( uint value, AtomicUint32 atomic )
         {
-            return atomic.ReadUint32() != value;
+            return value != atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( AtomicUint32 atomic, uint value )
         {
-            return atomic.ReadUint32() > value;
+            return atomic.Read() > value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( AtomicUint32 atomic, uint value )
         {
-            return atomic.ReadUint32() < value;
+            return atomic.Read() < value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( uint value, AtomicUint32 atomic )
         {
-            return value > atomic.ReadUint32();
+            return value > atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( uint value, AtomicUint32 atomic )
         {
-            return value < atomic.ReadUint32();
+            return value < atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( AtomicUint32 atomic1, AtomicUint32 atomic2 )
         {
-            return atomic1.ReadUint32() > atomic2.ReadUint32();
+            return atomic1.Read() > atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( AtomicUint32 atomic1, AtomicUint32 atomic2 )
         {
-            return atomic1.ReadUint32() < atomic2.ReadUint32();
+            return atomic1.Read() < atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( AtomicUint32 atomic, uint value )
         {
-            return atomic.ReadUint32() >= value;
+            return atomic.Read() >= value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( AtomicUint32 atomic, uint value )
         {
-            return atomic.ReadUint32() <= value;
+            return atomic.Read() <= value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( uint value, AtomicUint32 atomic )
         {
-            return value >= atomic.ReadUint32();
+            return value >= atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( uint value, AtomicUint32 atomic )
         {
-            return value <= atomic.ReadUint32();
+            return value <= atomic.Read();
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static bool operator >=( AtomicUint32 atomic1, AtomicUint32 atomic2 )
+        {
+            return atomic1.Read() >= atomic2.Read();
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static bool operator <=( AtomicUint32 atomic1, AtomicUint32 atomic2 )
+        {
+            return atomic1.Read() <= atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator +( AtomicUint32 atomic, uint value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Add, true, value );
+            return atomic.Read() + value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator +( uint value, AtomicUint32 atomic )
         {
-            return value + atomic.ReadUint32();
+            return value + atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator +( AtomicUint32 atomic1, AtomicUint32 atomic2 )
         {
-            return atomic1.PerformArithmeticOperation( ASC.AtomicOps.Add, true, atomic2.ReadUint32() );
+            return atomic1.Read() + atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator -( AtomicUint32 atomic, uint value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Subtract, true, value );
+            return atomic.Read() - value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator -( uint value, AtomicUint32 atomic )
         {
-            return value - atomic.ReadUint32();
+            return value - atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator -( AtomicUint32 atomic1, AtomicUint32 atomic2 )
         {
-            return atomic1.PerformArithmeticOperation( ASC.AtomicOps.Subtract, true, atomic2.ReadUint32() );
+            return atomic1.Read() - atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator *( AtomicUint32 atomic, uint value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Multiply, true, value );
+            return atomic.Read() * value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator *( uint value, AtomicUint32 atomic )
         {
-            return value * atomic.ReadUint32();
+            return value * atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator *( AtomicUint32 atomic1, AtomicUint32 atomic2 )
         {
-            return atomic1.PerformArithmeticOperation( ASC.AtomicOps.Multiply, true, atomic2.ReadUint32() );
+            return atomic1.Read() * atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator /( AtomicUint32 atomic, uint value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Divide, true, value );
+            return atomic.Read() / value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator /( uint value, AtomicUint32 atomic )
         {
-            return value / atomic.ReadUint32();
+            return value / atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator /( AtomicUint32 atomic1, AtomicUint32 atomic2 )
         {
-            return atomic1.PerformArithmeticOperation( ASC.AtomicOps.Divide, true, atomic2.ReadUint32() );
+            return atomic1.Read() / atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator %( AtomicUint32 atomic, uint value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Modulus, true, value );
+            return atomic.Read() % value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator %( uint value, AtomicUint32 atomic )
         {
-            return value % atomic.ReadUint32();
+            return value % atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator %( AtomicUint32 atomic1, AtomicUint32 atomic2 )
         {
-            return atomic1.PerformArithmeticOperation( ASC.AtomicOps.Modulus, true, atomic2.ReadUint32() );
+            return atomic1.Read() % atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator &( AtomicUint32 atomic, uint value )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.And, true, value );
+            return atomic.Read() & value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator &( uint value, AtomicUint32 atomic )
         {
-            return value & atomic.ReadUint32();
+            return value & atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator &( AtomicUint32 atomic1, AtomicUint32 atomic2 )
         {
-            return atomic1.PerformBitwiseOperation( ASC.AtomicOps.And, true, atomic2.ReadUint32() );
+            return atomic1.Read() & atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator |( AtomicUint32 atomic, uint value )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.Or, true, value );
+            return atomic.Read() | value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator |( uint value, AtomicUint32 atomic )
         {
-            return value | atomic.ReadUint32();
+            return value | atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator |( AtomicUint32 atomic1, AtomicUint32 atomic2 )
         {
-            return atomic1.PerformBitwiseOperation( ASC.AtomicOps.Or, true, atomic2.ReadUint32() );
+            return atomic1.Read() | atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator ^( AtomicUint32 atomic, uint value )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.Xor, true, value );
+            return atomic.Read() ^ value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator ^( uint value, AtomicUint32 atomic )
         {
-            return value ^ atomic.ReadUint32();
+            return value ^ atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator ^( AtomicUint32 atomic1, AtomicUint32 atomic2 )
         {
-            return atomic1.PerformBitwiseOperation( ASC.AtomicOps.Xor, true, atomic2.ReadUint32() );
+            return atomic1.Read() ^ atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator ~( AtomicUint32 atomic )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.Not, true, 0 );
+            return atomic.Not();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator <<( AtomicUint32 atomic, int value )
         {
-            return atomic.PerformShiftOperation( ASC.AtomicOps.LeftShift, true, value );
+            return atomic.Read() << value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static uint operator >>( AtomicUint32 atomic, int value )
         {
-            return atomic.PerformShiftOperation( ASC.AtomicOps.RightShift, true, value );
+            return atomic.Read() >> value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static uint operator <<( AtomicUint32 atomic1, AtomicUint32 atomic2 )
+        public static AtomicUint32 operator ++( AtomicUint32 atomic )
         {
-            return atomic1.PerformShiftOperation( ASC.AtomicOps.LeftShift, true, ( int ) atomic2.ReadUint32() );
+            atomic.Increment( 1 );
+            return atomic;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static uint operator >>( AtomicUint32 atomic1, AtomicUint32 atomic2 )
+        public static AtomicUint32 operator --( AtomicUint32 atomic )
         {
-            return atomic1.PerformShiftOperation( ASC.AtomicOps.RightShift, true, ( int ) atomic2.ReadUint32() );
+            atomic.Decrement( 1 );
+            return atomic;
         }
     }
+
+#pragma warning restore CS9107
+#pragma warning restore CS0660
+#pragma warning restore CS0661
 }
 

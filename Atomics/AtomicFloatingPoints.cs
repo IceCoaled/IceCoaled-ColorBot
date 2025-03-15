@@ -1,197 +1,323 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 
 namespace SCB.Atomics
 {
     using ASC = AtomicSupportClass;
 
-    sealed unsafe partial class AtomicFloat( float value ) : UnsafeAtomicNumerics<float>( value )
+
+#pragma warning disable CS9107
+#pragma warning disable CS0660
+#pragma warning disable CS0661
+
+    sealed unsafe partial class AtomicFloat( float value ) : AtomicNumericsBase<float>( value ), IAtomicBaseOperations<float>
     {
-        private bool disposed = false;
-        public Dictionary<ASC.AtomicOps, Func<float, float, float>> FloatArithmeticOperations { get; set; } = ASC.ArithmeticOperations<float>();
+        ///-------Interface-methods-Start------------///
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public float Add( float value )
+        public float Increment( in float value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Add, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.Addition );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Decrement( in float value )
+        {
+            return Supplant( -value, aO: ASC.AtomicOperation.Subtraction );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public float Subtract( float value )
+        public float CompareExchange( in float value, in float comparand )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Subtract, false, value );
+            if ( IsExtended )
+            {
+                return ASC.LongToFloat( Interlocked.CompareExchange( ref StorageEx->lAtomic, ASC.FloatToLong( value ), ASC.FloatToLong( comparand ) ) );
+            } else
+            {
+                return ASC.LongToFloat( Interlocked.CompareExchange( ref Storage->lAtomic, ASC.FloatToLong( value ), ASC.FloatToLong( comparand ) ) );
+            }
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public float Multiply( float value )
+        public float Read()
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Multiply, false, value );
+            if ( IsExtended && RefCount > ContentionThreshold )
+            {
+                using var sL = ScopeLock();
+                return ASC.LongToFloat( Unsafe.Read<long>( &StorageEx->lAtomic ) );
+            } else if ( IsExtended )
+            {
+                return ASC.LongToFloat( Interlocked.Read( ref StorageEx->lAtomic ) );
+            } else
+            {
+                return ASC.LongToFloat( Interlocked.Read( ref Storage->lAtomic ) );
+            }
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public float Divide( float value )
+        public void Write( in float value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Divide, false, value );
+            if ( IsExtended && RefCount > ContentionThreshold )
+            {
+                using var sL = ScopeLock();
+                Unsafe.Write( &StorageEx->lAtomic, ASC.FloatToLong( value ) );
+            } else if ( IsExtended )
+            {
+                _ = Interlocked.Exchange( ref StorageEx->lAtomic, ASC.FloatToLong( value ) );
+            } else
+            {
+                _ = Interlocked.Exchange( ref Storage->lAtomic, ASC.FloatToLong( value ) );
+            }
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public float Modulus( float value )
+        public float Supplant( [Optional] in float value, [Optional] in int rsValue, ASC.AtomicOperation aO )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Modulus, false, value );
-        }
+            if ( aO == ASC.AtomicOperation.BitShiftL || aO == ASC.AtomicOperation.BitShiftR ||
+                aO == ASC.AtomicOperation.RotateLeft || aO == ASC.AtomicOperation.RotateRight ||
+                aO == ASC.AtomicOperation.BitwiseAnd || aO == ASC.AtomicOperation.BitwiseOr ||
+                aO == ASC.AtomicOperation.BitwiseNot || aO == ASC.AtomicOperation.BitwiseXor )
+            {
+                return float.MaxValue;
+            }
 
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public float Min( float value )
-        {
-            float readValue = ReadFloat();
-            float result = float.Min( readValue, value );
+            float result = aO switch
+            {
+                ASC.AtomicOperation.Addition => ASC.Add( Read(), value ),
+                ASC.AtomicOperation.Subtraction => ASC.Subtract( Read(), value ),
+                ASC.AtomicOperation.Multiplication => ASC.Multiply( Read(), value ),
+                ASC.AtomicOperation.Division => ASC.Divide( Read(), value ),
+                ASC.AtomicOperation.Modulus => ASC.Modulus( Read(), value ),
+                _ => throw new ArgumentOutOfRangeException( nameof( aO ) ),
+            };
+
+            Write( result );
             return result;
         }
 
+        ///------------Interface-methods-End--------------/// 
+
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public float Max( float value )
+        public ScopedAtomicRef<AtomicFloat, float> GetScopedReference()
         {
-            float readValue = ReadFloat();
-            float result = float.Max( readValue, value );
-            return result;
+            return new ScopedAtomicRef<AtomicFloat, float>( this );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Add( in float value )
+        {
+            return Increment( value );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Subtract( in float value )
+        {
+            return Decrement( value );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Multiply( in float value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.Multiplication );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Divide( in float value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.Division );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Modulus( in float value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.Modulus );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Max( in float value )
+        {
+            return float.Max( Read(), value );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Min( in float value )
+        {
+            return float.Min( Read(), value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public float Abs()
         {
-            return float.Abs( ReadFloat() );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public float Negate()
-        {
-            float readValue = ReadFloat();
-            VALUE( -readValue );
-            return -readValue;
+            return MathF.Abs( Read() );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public float Sqrt()
         {
-            float readValue = ReadFloat();
-            float result = float.Sqrt( readValue );
-            VALUE( result );
-            return result;
+            return MathF.Sqrt( Read() );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public float Pow( float value )
+        public float Pow( in float value )
         {
-            float readValue = ReadFloat();
-            float result = float.Pow( readValue, value );
-            VALUE( result );
-            return result;
+            return MathF.Pow( Read(), value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public float Log( float value )
+        public float Log( in float value )
         {
-            float readValue = ReadFloat();
-            float result = float.Log( readValue, value );
-            VALUE( result );
-            return result;
+            return MathF.Log( Read(), value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public float Log10()
         {
-            float readValue = ReadFloat();
-            float result = float.Log10( readValue );
-            VALUE( result );
-            return result;
+            return MathF.Log10( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Log2()
+        {
+            return MathF.Log2( Read() );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public float Exp()
         {
-            float readValue = ReadFloat();
-            float result = float.Exp( readValue );
-            VALUE( result );
-            return result;
+            return MathF.Exp( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Sin()
+        {
+            return MathF.Sin( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Cos()
+        {
+            return MathF.Cos( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Tan()
+        {
+            return MathF.Tan( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Asin()
+        {
+            return MathF.Asin( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Acos()
+        {
+            return MathF.Acos( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Atan()
+        {
+            return MathF.Atan( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Atan2( in float value )
+        {
+            return MathF.Atan2( Read(), value );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Sinh()
+        {
+            return MathF.Sinh( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Cosh()
+        {
+            return MathF.Cosh( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Tanh()
+        {
+            return MathF.Tanh( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Asinh()
+        {
+            return MathF.Asinh( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Acosh()
+        {
+            return MathF.Acosh( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Atanh()
+        {
+            return MathF.Atanh( Read() );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public float Floor()
         {
-            float readValue = ReadFloat();
-            float result = float.Floor( readValue );
-            VALUE( result );
-            return result;
+            return MathF.Floor( Read() );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public float Ceiling()
         {
-            float readValue = ReadFloat();
-            float result = float.Ceiling( readValue );
-            VALUE( result );
-            return result;
+            return MathF.Ceiling( Read() );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public float Round()
         {
-            float readValue = ReadFloat();
-            float result = float.Round( readValue );
-            VALUE( result );
-            return result;
+            return MathF.Round( Read() );
         }
-
-
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private float PerformArithmeticOperation( ASC.AtomicOps op, bool overload, float value )
+        public float Truncate()
         {
-            if ( !FloatArithmeticOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            float result = operation( ReadFloat(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
+            return MathF.Truncate( Read() );
         }
 
-        ~AtomicFloat()
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Sign()
         {
-            Dispose( false );
+            return MathF.Sign( Read() );
         }
 
-        protected override void Dispose( bool disposing )
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Clamp( in float min, in float max )
         {
-            if ( !disposed &&
-                disposing )
-            {
-                base.Dispose( disposing );
-            }
-            disposed = true;
+            float read = Read();
+            return read < min ? min : read > max ? max : read;
         }
 
-        // Object overrides
-
-        public override bool Equals( object? obj )
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public float Lerp( in float value, in float t )
         {
-            if ( obj is AtomicFloat atomic )
-            {
-                return ReadFloat() == atomic.ReadFloat() &&
-                    GetHashCode() == atomic.GetHashCode();
-            }
-            return false;
+            float read = Read();
+            return read + ( value - read ) * t;
         }
 
-        public override int GetHashCode()
-        {
-            return base.GetHashCode();
-        }
 
         // Overload operators
 
@@ -204,223 +330,213 @@ namespace SCB.Atomics
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( AtomicFloat atomic, float value )
         {
-            return atomic.Abs() == float.Abs( value );
+            return atomic.Abs() - value > -float.Epsilon;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( AtomicFloat atomic, float value )
         {
-            return atomic.Abs() != float.Abs( value );
+            return atomic.Abs() - value < float.Epsilon;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( AtomicFloat atomic1, AtomicFloat atomic2 )
         {
-            return atomic1.Equals( atomic2 );
+            return atomic1.Abs() - atomic2.Abs() > -float.Epsilon;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( AtomicFloat atomic1, AtomicFloat atomic2 )
         {
-            return !atomic1.Equals( atomic2 );
+            return atomic1.Abs() - atomic2.Abs() < float.Epsilon;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( float value, AtomicFloat atomic )
         {
-            return float.Abs( value ) == atomic.ReadFloat();
+            return value - atomic.Abs() > -float.Epsilon;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( float value, AtomicFloat atomic )
         {
-            return float.Abs( value ) != atomic.Abs();
+            return value - atomic.Abs() < float.Epsilon;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( AtomicFloat atomic, float value )
         {
-            return atomic.ReadFloat() > value;
+            return atomic.Read() > value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( AtomicFloat atomic, float value )
         {
-            return atomic.ReadFloat() < value;
+            return atomic.Read() < value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( float value, AtomicFloat atomic )
         {
-            return value > atomic.ReadFloat();
+            return value > atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( float value, AtomicFloat atomic )
         {
-            return value < atomic.ReadFloat();
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool operator <( AtomicFloat atomic1, AtomicFloat atomic2 )
-        {
-            return atomic1.ReadFloat() < atomic2.ReadFloat();
+            return value < atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( AtomicFloat atomic1, AtomicFloat atomic2 )
         {
-            return atomic1.ReadFloat() > atomic2.ReadFloat();
+            return atomic1.Read() > atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool operator >=( AtomicFloat atomic1, AtomicFloat atomic2 )
+        public static bool operator <( AtomicFloat atomic1, AtomicFloat atomic2 )
         {
-            return atomic1.ReadFloat() >= atomic2.ReadFloat();
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool operator <=( AtomicFloat atomic1, AtomicFloat atomic2 )
-        {
-            return atomic1.ReadFloat() <= atomic2.ReadFloat();
+            return atomic1.Read() < atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( AtomicFloat atomic, float value )
         {
-            return atomic.ReadFloat() >= value;
+            return atomic.Read() >= value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( AtomicFloat atomic, float value )
         {
-            return atomic.ReadFloat() <= value;
+            return atomic.Read() <= value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( float value, AtomicFloat atomic )
         {
-            return value >= atomic.ReadFloat();
+            return value >= atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( float value, AtomicFloat atomic )
         {
-            return value <= atomic.ReadFloat();
+            return value <= atomic.Read();
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static bool operator >=( AtomicFloat atomic1, AtomicFloat atomic2 )
+        {
+            return atomic1.Read() >= atomic2.Read();
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static bool operator <=( AtomicFloat atomic1, AtomicFloat atomic2 )
+        {
+            return atomic1.Read() <= atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator +( AtomicFloat atomic, float value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Add, true, value );
+            return atomic.Read() + value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator +( float value, AtomicFloat atomic )
         {
-            return value + atomic.ReadFloat();
+            return value + atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator +( AtomicFloat atomic1, AtomicFloat atomic2 )
         {
-            return atomic1.ReadFloat() + atomic2.ReadFloat();
+            return atomic1.Read() + atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator -( AtomicFloat atomic, float value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Subtract, true, value );
+            return atomic.Read() - value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator -( float value, AtomicFloat atomic )
         {
-            return value - atomic.ReadFloat();
+            return value - atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator -( AtomicFloat atomic1, AtomicFloat atomic2 )
         {
-            return atomic1.ReadFloat() - atomic2.ReadFloat();
+            return atomic1.Read() - atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator *( AtomicFloat atomic, float value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Multiply, true, value );
+            return atomic.Read() * value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static AtomicFloat operator *( float value, AtomicFloat atomic )
+        public static float operator *( float value, AtomicFloat atomic )
         {
-            return new AtomicFloat( atomic.ReadFloat() * value );
+            return value * atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator *( AtomicFloat atomic1, AtomicFloat atomic2 )
         {
-            return atomic1.ReadFloat() * atomic2.ReadFloat();
+            return atomic1.Read() * atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator /( AtomicFloat atomic, float value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Divide, true, value );
+            return atomic.Read() / value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator /( float value, AtomicFloat atomic )
         {
-            return value / atomic.ReadFloat();
+            return value / atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator /( AtomicFloat atomic1, AtomicFloat atomic2 )
         {
-            return atomic1.ReadFloat() / atomic2.ReadFloat();
+            return atomic1.Read() / atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator %( AtomicFloat atomic, float value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Modulus, true, value );
+            return atomic.Read() % value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator %( float value, AtomicFloat atomic )
         {
-            return value % atomic.ReadFloat();
+            return value % atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static float operator %( AtomicFloat atomic1, AtomicFloat atomic2 )
         {
-            return atomic1.ReadFloat() % atomic2.ReadFloat();
+            return atomic1.Read() % atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static AtomicFloat operator ++( AtomicFloat atomic )
         {
-            return atomic.Increment();
+            atomic.Increment( 1 );
+            return atomic;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static AtomicFloat operator --( AtomicFloat atomic )
         {
-            return atomic.Decrement();
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static AtomicFloat operator +( AtomicFloat atomic )
-        {
+            atomic.Decrement( 1 );
             return atomic;
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static AtomicFloat operator -( AtomicFloat atomic )
-        {
-            return atomic.Negate();
         }
     }
 
@@ -428,191 +544,306 @@ namespace SCB.Atomics
 
 
 
-    sealed unsafe partial class AtomicDouble( double value ) : UnsafeAtomicNumerics<double>( value )
+    sealed unsafe class AtomicDouble( double value ) : AtomicNumericsBase<double>( value ), IAtomicBaseOperations<double>
     {
-        private bool disposed = false;
-        public Dictionary<ASC.AtomicOps, Func<double, double, double>> DoubleArithmeticOperations { get; set; } = ASC.ArithmeticOperations<double>();
+        ///-------Interface-methods-Start------------///
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Increment( in double value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.Addition );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Decrement( in double value )
+        {
+            return Supplant( -value, aO: ASC.AtomicOperation.Subtraction );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double CompareExchange( in double value, in double comparand )
+        {
+            if ( IsExtended )
+            {
+                return ASC.LongToDouble( Interlocked.CompareExchange( ref StorageEx->lAtomic, ASC.DoubleToLong( value ), ASC.DoubleToLong( comparand ) ) );
+            } else
+            {
+                return ASC.LongToDouble( Interlocked.CompareExchange( ref Storage->lAtomic, ASC.DoubleToLong( value ), ASC.DoubleToLong( comparand ) ) );
+            }
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Read()
+        {
+            if ( IsExtended && RefCount > ContentionThreshold )
+            {
+                using var sL = ScopeLock();
+                return ASC.LongToDouble( Unsafe.Read<long>( &StorageEx->lAtomic ) );
+            } else if ( IsExtended )
+            {
+                return ASC.LongToDouble( Interlocked.Read( ref StorageEx->lAtomic ) );
+            } else
+            {
+                return ASC.LongToDouble( Interlocked.Read( ref Storage->lAtomic ) );
+            }
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public void Write( in double value )
+        {
+            if ( IsExtended && RefCount > ContentionThreshold )
+            {
+                using var sL = ScopeLock();
+                Unsafe.Write( &StorageEx->lAtomic, ASC.DoubleToLong( value ) );
+            } else if ( IsExtended )
+            {
+                _ = Interlocked.Exchange( ref StorageEx->lAtomic, ASC.DoubleToLong( value ) );
+            } else
+            {
+                _ = Interlocked.Exchange( ref Storage->lAtomic, ASC.DoubleToLong( value ) );
+            }
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Supplant( [Optional] in double value, [Optional] in int rsValue, ASC.AtomicOperation aO )
+        {
+            if ( aO == ASC.AtomicOperation.BitShiftL || aO == ASC.AtomicOperation.BitShiftR ||
+                aO == ASC.AtomicOperation.RotateLeft || aO == ASC.AtomicOperation.RotateRight ||
+                aO == ASC.AtomicOperation.BitwiseAnd || aO == ASC.AtomicOperation.BitwiseOr ||
+                aO == ASC.AtomicOperation.BitwiseNot || aO == ASC.AtomicOperation.BitwiseXor )
+            {
+                return double.MaxValue;
+            }
+
+            double result = aO switch
+            {
+                ASC.AtomicOperation.Addition => ASC.Add( Read(), value ),
+                ASC.AtomicOperation.Subtraction => ASC.Subtract( Read(), value ),
+                ASC.AtomicOperation.Multiplication => ASC.Multiply( Read(), value ),
+                ASC.AtomicOperation.Division => ASC.Divide( Read(), value ),
+                ASC.AtomicOperation.Modulus => ASC.Modulus( Read(), value ),
+                _ => throw new ArgumentOutOfRangeException( nameof( aO ) ),
+            };
+
+            Write( result );
+            return result;
+        }
+
+        ///------------Interface-methods-End--------------/// 
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public ScopedAtomicRef<AtomicDouble, double> GetScopedReference()
+        {
+            return new ScopedAtomicRef<AtomicDouble, double>( this );
+        }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Add( double value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Add, false, value );
+            return Increment( value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Subtract( double value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Subtract, false, value );
+            return Decrement( value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Multiply( double value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Multiply, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.Multiplication );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Divide( double value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Divide, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.Division );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Modulus( double value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Modulus, false, value );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public double Min( double value )
-        {
-            double readValue = ReadDouble();
-            double result = double.Min( readValue, value );
-            return result;
+            return Supplant( value, aO: ASC.AtomicOperation.Modulus );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Max( double value )
         {
-            double readValue = ReadDouble();
-            double result = double.Max( readValue, value );
-            return result;
+            return Double.Max( Read(), value );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Min( double value )
+        {
+            return Double.Min( Read(), value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Abs()
         {
-            return double.Abs( ReadDouble() );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public double Negate()
-        {
-            double readValue = ReadDouble();
-            VALUE( -readValue );
-            return -readValue;
+            return Math.Abs( Read() );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Sqrt()
         {
-            double readValue = ReadDouble();
-            double result = double.Sqrt( readValue );
-            VALUE( result );
-            return result;
+            return Math.Sqrt( Read() );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Pow( double value )
         {
-            double readValue = ReadDouble();
-            double result = double.Pow( readValue, value );
-            VALUE( result );
-            return result;
+            return Math.Pow( Read(), value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Log( double value )
         {
-            double readValue = ReadDouble();
-            double result = double.Log( readValue, value );
-            VALUE( result );
-            return result;
+            return Math.Log( Read(), value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Log10()
         {
-            double readValue = ReadDouble();
-            double result = double.Log10( readValue );
-            VALUE( result );
-            return result;
+            return Math.Log10( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Log2()
+        {
+            return Math.Log2( Read() );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Exp()
         {
-            double readValue = ReadDouble();
-            double result = double.Exp( readValue );
-            VALUE( result );
-            return result;
+            return Math.Exp( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Sin()
+        {
+            return Math.Sin( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Cos()
+        {
+            return Math.Cos( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Tan()
+        {
+            return Math.Tan( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Asin()
+        {
+            return Math.Asin( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Acos()
+        {
+            return Math.Acos( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Atan()
+        {
+            return Math.Atan( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Atan2( double value )
+        {
+            return Math.Atan2( Read(), value );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Sinh()
+        {
+            return Math.Sinh( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Cosh()
+        {
+            return Math.Cosh( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Tanh()
+        {
+            return Math.Tanh( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Asinh()
+        {
+            return Math.Asinh( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Acosh()
+        {
+            return Math.Acosh( Read() );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Atanh()
+        {
+            return Math.Atanh( Read() );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Floor()
         {
-            double readValue = ReadDouble();
-            double result = double.Floor( readValue );
-            VALUE( result );
-            return result;
+            return Math.Floor( Read() );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Ceiling()
         {
-            double readValue = ReadDouble();
-            double result = double.Ceiling( readValue );
-            VALUE( result );
-            return result;
+            return Math.Ceiling( Read() );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public double Round()
         {
-            double readValue = ReadDouble();
-            double result = double.Round( readValue );
-            VALUE( result );
-            return result;
+            return Math.Round( Read() );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private double PerformArithmeticOperation( ASC.AtomicOps op, bool overload, double value )
+        public double Truncate()
         {
-            if ( !DoubleArithmeticOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            double result = operation( ReadDouble(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
+            return Math.Truncate( Read() );
         }
 
-        ~AtomicDouble()
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Sign()
         {
-            Dispose( false );
+            return Math.Sign( Read() );
         }
 
-        protected override void Dispose( bool disposing )
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Clamp( in double min, in double max )
         {
-            if ( !disposed &&
-                disposing )
-            {
-                base.Dispose( disposing );
-            }
-            disposed = true;
+            double read = Read();
+            return read < min ? min : read > max ? max : read;
         }
 
-        // Object overrides
-
-        public override bool Equals( object? obj )
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public double Lerp( in double value, in double t )
         {
-            if ( obj is AtomicDouble atomic )
-            {
-                return ReadDouble() == atomic.ReadDouble() &&
-                    GetHashCode() == atomic.GetHashCode();
-            }
-            return false;
+            double read = Read();
+            return read + ( value - read ) * t;
         }
 
-        public override int GetHashCode()
-        {
-            return base.GetHashCode();
-        }
 
         // Overload operators
 
@@ -625,223 +856,217 @@ namespace SCB.Atomics
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( AtomicDouble atomic, double value )
         {
-            return atomic.Abs() == double.Abs( value );
+            return atomic.Abs() - value > -double.Epsilon;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( AtomicDouble atomic, double value )
         {
-            return atomic.Abs() != double.Abs( value );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool operator ==( double value, AtomicDouble atomic )
-        {
-            return double.Abs( value ) == atomic.Abs();
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool operator !=( double value, AtomicDouble atomic )
-        {
-            return value != atomic.ReadDouble();
+            return atomic.Abs() - value < double.Epsilon;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( AtomicDouble atomic1, AtomicDouble atomic2 )
         {
-            return atomic1.Equals( atomic2 );
+            return atomic1.Abs() - atomic2.Abs() > -double.Epsilon;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( AtomicDouble atomic1, AtomicDouble atomic2 )
         {
-            return !atomic1.Equals( atomic2 );
+            return atomic1.Abs() - atomic2.Abs() < double.Epsilon;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static bool operator ==( double value, AtomicDouble atomic )
+        {
+            return value - atomic.Abs() > -double.Epsilon;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static bool operator !=( double value, AtomicDouble atomic )
+        {
+            return value - atomic.Abs() < double.Epsilon;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( AtomicDouble atomic, double value )
         {
-            return atomic.ReadDouble() > value;
+            return atomic.Read() > value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( AtomicDouble atomic, double value )
         {
-            return atomic.ReadDouble() < value;
+            return atomic.Read() < value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( double value, AtomicDouble atomic )
         {
-            return value > atomic.ReadDouble();
+            return value > atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( double value, AtomicDouble atomic )
         {
-            return value < atomic.ReadDouble();
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool operator <( AtomicDouble atomic1, AtomicDouble atomic2 )
-        {
-            return atomic1.ReadDouble() < atomic2.ReadDouble();
+            return value < atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( AtomicDouble atomic1, AtomicDouble atomic2 )
         {
-            return atomic1.ReadDouble() > atomic2.ReadDouble();
+            return atomic1.Read() > atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool operator >=( AtomicDouble atomic1, AtomicDouble atomic2 )
+        public static bool operator <( AtomicDouble atomic1, AtomicDouble atomic2 )
         {
-            return atomic1.ReadDouble() >= atomic2.ReadDouble();
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool operator <=( AtomicDouble atomic1, AtomicDouble atomic2 )
-        {
-            return atomic1.ReadDouble() <= atomic2.ReadDouble();
+            return atomic1.Read() < atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( AtomicDouble atomic, double value )
         {
-            return atomic.ReadDouble() >= value;
+            return atomic.Read() >= value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( AtomicDouble atomic, double value )
         {
-            return atomic.ReadDouble() <= value;
+            return atomic.Read() <= value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( double value, AtomicDouble atomic )
         {
-            return value >= atomic.ReadDouble();
+            return value >= atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( double value, AtomicDouble atomic )
         {
-            return value <= atomic.ReadDouble();
+            return value <= atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static double operator +( double value, AtomicDouble atomic )
+        public static bool operator >=( AtomicDouble atomic1, AtomicDouble atomic2 )
         {
-            return value + atomic.ReadDouble();
+            return atomic1.Read() >= atomic2.Read();
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static bool operator <=( AtomicDouble atomic1, AtomicDouble atomic2 )
+        {
+            return atomic1.Read() <= atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator +( AtomicDouble atomic, double value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Add, true, value );
+            return atomic.Read() + value;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static double operator +( double value, AtomicDouble atomic )
+        {
+            return value + atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator +( AtomicDouble atomic1, AtomicDouble atomic2 )
         {
-            return atomic1.ReadDouble() + atomic2.ReadDouble();
+            return atomic1.Read() + atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator -( AtomicDouble atomic, double value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Subtract, true, value );
+            return atomic.Read() - value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator -( double value, AtomicDouble atomic )
         {
-            return value - atomic.ReadDouble();
+            return value - atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator -( AtomicDouble atomic1, AtomicDouble atomic2 )
         {
-            return atomic1.ReadDouble() - atomic2.ReadDouble();
+            return atomic1.Read() - atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator *( AtomicDouble atomic, double value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Multiply, true, value );
+            return atomic.Read() * value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator *( double value, AtomicDouble atomic )
         {
-            return value * atomic.ReadDouble();
+            return value * atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator *( AtomicDouble atomic1, AtomicDouble atomic2 )
         {
-            return atomic1.ReadDouble() * atomic2.ReadDouble();
+            return atomic1.Read() * atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator /( AtomicDouble atomic, double value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Divide, true, value );
+            return atomic.Read() / value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator /( double value, AtomicDouble atomic )
         {
-            return value / atomic.ReadDouble();
+            return value / atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator /( AtomicDouble atomic1, AtomicDouble atomic2 )
         {
-            return atomic1.ReadDouble() / atomic2.ReadDouble();
+            return atomic1.Read() / atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator %( AtomicDouble atomic, double value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Modulus, true, value );
+            return atomic.Read() % value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator %( double value, AtomicDouble atomic )
         {
-            return value % atomic.ReadDouble();
+            return value % atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static double operator %( AtomicDouble atomic1, AtomicDouble atomic2 )
         {
-            return atomic1.ReadDouble() % atomic2.ReadDouble();
+            return atomic1.Read() % atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static AtomicDouble operator ++( AtomicDouble atomic )
         {
-            return atomic.Increment();
+            atomic.Increment( 1 );
+            return atomic;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static AtomicDouble operator --( AtomicDouble atomic )
         {
-            return atomic.Decrement();
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static AtomicDouble operator +( AtomicDouble atomic )
-        {
+            atomic.Decrement( 1 );
             return atomic;
         }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static AtomicDouble operator -( AtomicDouble atomic )
-        {
-            return atomic.Negate();
-        }
     }
+
+#pragma warning restore CS9107
+#pragma warning restore CS0660
+#pragma warning restore CS0661
 }

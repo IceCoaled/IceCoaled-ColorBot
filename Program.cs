@@ -1,8 +1,10 @@
 #if DEBUG
-#define RENDORDOC_DEBUG //< Enable RenderDoc debugging.
-#define RENDERDOC_INJECTION_WARNING //< Show a message box to remind user to attach renderdoc, if youre using this, you dont start the process from renderdoc.
+//#define RENDORDOC_DEBUG //< Enable RenderDoc debugging.
+//#define RENDERDOC_INJECTION_WARNING //< Show a message box to remind user to attach renderdoc, if youre using this, you dont start the process from renderdoc.
 #endif //< renderdoc debug
 
+
+using SCB.DirectX;
 
 namespace SCB
 {
@@ -15,6 +17,9 @@ namespace SCB
         [STAThread]
         static void Main()
         {
+            // Check for proper windows version that is capable of
+            // Running windows graphics capture
+            WindowCapture.CheckForCompatability();
 
 #if RENDERDOC_INJECTION_WARNING
             // Pop windows message box to remind that we need to attach renderdoc, we are using a windows message box as we cant use MaterialSkin till its initialized.
@@ -36,7 +41,7 @@ namespace SCB
 
 #if DEBUG
 #if RENDORDOC_DEBUG
-            RenderDocApi renderDocApi = new();
+            DirectX.RenderDocApi renderDocApi = new();
 #endif
             Logger.Start();
             Logger.Log( "Logger Initialized" );

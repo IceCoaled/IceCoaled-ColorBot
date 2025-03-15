@@ -20,10 +20,12 @@ namespace SCB
 #endif
 
         private readonly ManagerInit managerInit;
-        private Panel statusPanel;
-        private Label statusLabel;
-        private Bezier bezierForm;
-        private Configurations configurationsForm;
+        private Panel? statusPanel;
+        private Label? statusLabel;
+        private Bezier? bezierForm;
+        private Configurations? configurationsForm;
+
+        private Panel ColorSelectionPanel;
 
 
         internal IceColorBot( ref ManagerInit initManager )
@@ -49,7 +51,7 @@ namespace SCB
             managerInit.trayIcon = new()
             {
                 Text = "IceColorBot",
-                Icon = Icon,
+                Icon = this.Icon,
                 ContextMenuStrip = new ContextMenuStrip()
             };
             managerInit.trayIcon.ContextMenuStrip.Items.Add( "Exit", null, Exit );
@@ -74,6 +76,16 @@ namespace SCB
             // Initialize the form components
             InitializeComponent();
             InitializeStatusBar();
+
+            // Set the gray overlay over the color selection
+            // Combo box
+            ColorSelectionPanel = new()
+            {
+                Location = this.materialComboBox1.Location,
+                Size = this.materialComboBox1.Size,
+                BackColor = Color.FromArgb( 200, 128, 128, 128 ), // 50% transparent gray
+                Visible = true,
+            };
 
             ErrorHandler.OnStatusUpdate += UpdateStatusBar;
         }
@@ -101,6 +113,7 @@ namespace SCB
             this.materialButton3 = new MaterialButton();
             this.materialButton5 = new MaterialButton();
             this.toolTip1 = new ToolTip( this.components );
+            this.checkBox1 = new CheckBox();
             this.SuspendLayout();
             // 
             // materialSlider1
@@ -121,6 +134,7 @@ namespace SCB
             this.materialSlider1.UseAccentColor = true;
             this.materialSlider1.ValueMax = 100;
             this.materialSlider1.onValueChanged += this.materialSlider1_onValueChanged;
+            this.materialSlider1.Click += this.materialSlider1_Click;
             // 
             // materialSlider2
             // 
@@ -138,6 +152,7 @@ namespace SCB
             this.materialSlider2.UseAccentColor = true;
             this.materialSlider2.ValueMax = 100;
             this.materialSlider2.onValueChanged += this.materialSlider2_onValueChanged;
+            this.materialSlider2.Click += this.materialSlider2_Click;
             // 
             // materialSwitch1
             // 
@@ -182,6 +197,7 @@ namespace SCB
             this.materialComboBox1.TabIndex = 38;
             this.materialComboBox1.SelectedIndexChanged += this.materialComboBox1_SelectedIndexChanged;
             this.materialComboBox1.MouseHover += this.MaterialComboBox1_MouseHover;
+            this.materialComboBox1.Enabled = false;
             // 
             // materialLabel1
             // 
@@ -370,16 +386,17 @@ namespace SCB
             this.materialSlider3.Location = new Point( 350, 382 );
             this.materialSlider3.MouseState = MaterialSkin.MouseState.HOVER;
             this.materialSlider3.Name = "materialSlider3";
-            this.materialSlider3.RangeMax = 3840;
+            this.materialSlider3.RangeMax = 700;
             this.materialSlider3.RangeMin = 100;
             this.materialSlider3.Size = new Size( 223, 40 );
             this.materialSlider3.TabIndex = 49;
             this.materialSlider3.Text = "Aim Fov";
             this.materialSlider3.UseAccentColor = true;
             this.materialSlider3.Value = 100;
-            this.materialSlider3.ValueMax = 3840;
+            this.materialSlider3.ValueMax = 700;
             this.materialSlider3.ValueSuffix = "px";
             this.materialSlider3.onValueChanged += this.materialSlider3_onValueChanged;
+            this.materialSlider3.Click += this.materialSlider3_Click;
             // 
             // materialSlider4
             // 
@@ -398,7 +415,9 @@ namespace SCB
             this.materialSlider4.Text = "Deadzone";
             this.materialSlider4.UseAccentColor = true;
             this.materialSlider4.ValueMax = 100;
+            this.materialSlider4.ValueSuffix = "px";
             this.materialSlider4.onValueChanged += this.materialSlider4_onValueChanged;
+            this.materialSlider4.Click += this.materialSlider4_Click;
             // 
             // materialButton3
             // 
@@ -449,12 +468,24 @@ namespace SCB
             this.toolTip1.ToolTipIcon = ToolTipIcon.Info;
             this.toolTip1.ToolTipTitle = "AutomatecColorSelection";
             // 
+            // checkBox1
+            // 
+            this.checkBox1.AutoSize = true;
+            this.checkBox1.Location = new Point( 198, 55 );
+            this.checkBox1.Name = "checkBox1";
+            this.checkBox1.Size = new Size( 74, 49 );
+            this.checkBox1.TabIndex = 53;
+            this.checkBox1.Text = "Activate\r\nColor\r\nSelection\r\n";
+            this.checkBox1.UseVisualStyleBackColor = true;
+            this.checkBox1.CheckedChanged += this.CheckBox1_CheckedChanged;
+            // 
             // IceColorBot
             // 
             this.BackColor = Color.MidnightBlue;
             this.BackgroundImage = ( Image ) resources.GetObject( "$this.BackgroundImage" );
             this.BackgroundImageLayout = ImageLayout.Center;
             this.ClientSize = new Size( 579, 583 );
+            this.Controls.Add( this.checkBox1 );
             this.Controls.Add( this.materialButton5 );
             this.Controls.Add( this.materialButton3 );
             this.Controls.Add( this.materialSlider4 );
@@ -472,6 +503,7 @@ namespace SCB
             this.Controls.Add( this.materialSwitch1 );
             this.Controls.Add( this.materialSlider2 );
             this.Controls.Add( this.materialSlider1 );
+            this.Controls.Add( this.checkBox1 );
             this.FormBorderStyle = FormBorderStyle.Fixed3D;
             this.Icon = ( Icon ) resources.GetObject( "$this.Icon" );
             this.KeyPreview = true;
@@ -497,7 +529,7 @@ namespace SCB
             // Create the status label
             statusLabel = new Label
             {
-                Text = "Ready", // Initial text
+                Text = "Not Ready", // Initial text
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft,
                 ForeColor = Color.LightGreen, // Set text color to match the theme
@@ -510,7 +542,6 @@ namespace SCB
             // Add the panel to the form
             this.Controls.Add( statusPanel );
         }
-
 
 
         private void Exit( object? sender, EventArgs e )
@@ -565,7 +596,7 @@ namespace SCB
                                            this.ClientRectangle.Width, this.ClientRectangle.Height - 25 );
 
             // If there is a background image, draw it within the adjusted rectangle
-            if ( this.BackgroundImage != null )
+            if ( this.BackgroundImage is not null )
             {
                 e.Graphics.DrawImage( this.BackgroundImage, clientRect );
             }
@@ -668,37 +699,37 @@ namespace SCB
             {
                 case 0:
                 {
-                    key = MouseInput.VK_LBUTTON;
+                    key = HidInputs.VK_LBUTTON;
                     PlayerData.SetAimKey( key );
                 }
                 break;
                 case 1:
                 {
-                    key = MouseInput.VK_RBUTTON;
+                    key = HidInputs.VK_RBUTTON;
                     PlayerData.SetAimKey( key );
                 }
                 break;
                 case 2:
                 {
-                    key = MouseInput.VK_LSHIFT;
+                    key = HidInputs.VK_LSHIFT;
                     PlayerData.SetAimKey( key );
                 }
                 break;
                 case 3:
                 {
-                    key = MouseInput.VK_LMENU;
+                    key = HidInputs.VK_LMENU;
                     PlayerData.SetAimKey( key );
                 }
                 break;
                 case 4:
                 {
-                    key = MouseInput.VK_LCONTROL;
+                    key = HidInputs.VK_LCONTROL;
                     PlayerData.SetAimKey( key );
                 }
                 break;
                 default:
                 {
-                    key = MouseInput.VK_LBUTTON;
+                    key = HidInputs.VK_LBUTTON;
                     PlayerData.SetAimKey( key );
                 }
                 break;
@@ -722,18 +753,14 @@ namespace SCB
             string colorCode = "#F27AEB"; //<-- This is the color code for the crosshair
             recoilPatternCapture = new( ref gameRect, colorCode );
             recoilPatternCapture.StartMonitoring();
-            Logger.Log( "Recoil Pattern Capture Enabled" );
-#else
-            // Setup directX11 
-            managerInit.directX11 = new( ref managerInit.colorToleranceManager!, managerInit.renderDocApi! );
-
-            // start capture watch for aimbot
-            Utils.Watch.StartCaptureWatch();
-
+            Logger.Log( "Recoil Pattern Capture Enabled" );           
+#endif
+#endif
             // Start the aimbot
             managerInit.aimbot!.Start( managerInit.directX11 );
-#endif
-#endif
+
+            // Push our app to tray
+            Hide();
         }
 
         private void materialButton2_Click( object? sender, EventArgs e )
@@ -744,7 +771,6 @@ namespace SCB
             }
 
             managerInit.aimbot!.Stop();
-            Utils.Watch.StopCaptureWatch();
 #if GETRECOILPATTERN
             recoilPatternCapture!.StopMonitoring();
 #endif
@@ -758,19 +784,41 @@ namespace SCB
 
         private void materialSlider1_onValueChanged( object? sender, int newValue )
         {
-            double value = ( double ) newValue;
-            PlayerData.SetAimSpeed( value );
+            PlayerData.SetAimSpeed( ( ( float ) newValue ) );
+        }
+
+        private void materialSlider1_Click( object? sender, EventArgs e )
+        {
+            if ( sender is not null )
+            {
+                PlayerData.SetAimSpeed( ( ( float ) ( ( MaterialSlider ) sender ).Value ) );
+            }
         }
 
         private void materialSlider2_onValueChanged( object? sender, int newValue )
         {
-            double value = ( double ) newValue;
-            PlayerData.SetAimSmoothing( value );
+            PlayerData.SetAimSmoothing( ( ( float ) newValue ) );
+        }
+
+        private void materialSlider2_Click( object? sender, EventArgs e )
+        {
+            if ( sender is not null )
+            {
+                PlayerData.SetAimSmoothing( ( ( float ) ( ( MaterialSlider ) sender ).Value ) );
+            }
         }
 
         private void materialSlider3_onValueChanged( object? sender, int newValue )
         {
             PlayerData.SetAimFov( newValue );
+        }
+
+        private void materialSlider3_Click( object? sender, EventArgs e )
+        {
+            if ( sender is not null )
+            {
+                PlayerData.SetAimFov( ( ( MaterialSlider ) sender ).Value );
+            }
         }
 
 
@@ -779,13 +827,21 @@ namespace SCB
             PlayerData.SetDeadzone( newValue );
         }
 
+        private void materialSlider4_Click( object? sender, EventArgs e )
+        {
+            if ( sender is not null )
+            {
+                PlayerData.SetDeadzone( ( ( MaterialSlider ) sender ).Value );
+            }
+        }
+
         void UnhandledExceptionTrapper( object? sender, UnhandledExceptionEventArgs? e )
         {
             ErrorHandler.HandleExceptionNonExit( new Exception( e?.ExceptionObject is Exception ex ? ex.Message : "Unknown Exception" ) );
             OnFormClosed( new FormClosedEventArgs( CloseReason.ApplicationExitCall ) );
         }
 
-        private void materialSwitch1_CheckedChanged( object sender, EventArgs e )
+        private void materialSwitch1_CheckedChanged( object? sender, EventArgs e )
         {
             if ( materialSwitch1.Checked )
             {
@@ -796,7 +852,7 @@ namespace SCB
             }
         }
 
-        private void materialSwitch2_CheckedChanged( object sender, EventArgs e )
+        private void materialSwitch2_CheckedChanged( object? sender, EventArgs e )
         {
             if ( materialSwitch2.Checked )
             {
@@ -808,13 +864,13 @@ namespace SCB
         }
 
 
-        private void materialButton3_Click( object sender, EventArgs e )
+        private void materialButton3_Click( object? sender, EventArgs e )
         {
             bezierForm = new();
             bezierForm.Show();
         }
 
-        private void materialButton5_Click( object sender, EventArgs e )
+        private void materialButton5_Click( object? sender, EventArgs e )
         {
             configurationsForm = new( UpdateSettingsUI! );
             configurationsForm.Show();
@@ -898,11 +954,11 @@ namespace SCB
         {
             return aimKey switch
             {
-                MouseInput.VK_LBUTTON => "left mouse button",
-                MouseInput.VK_RBUTTON => "right mouse button",
-                MouseInput.VK_LSHIFT => "left shift",
-                MouseInput.VK_LMENU => "left alt",
-                MouseInput.VK_LCONTROL => "left control",
+                HidInputs.VK_LBUTTON => "left mouse button",
+                HidInputs.VK_RBUTTON => "right mouse button",
+                HidInputs.VK_LSHIFT => "left shift",
+                HidInputs.VK_LMENU => "left alt",
+                HidInputs.VK_LCONTROL => "left control",
                 _ => "left mouse button"
             };
         }
@@ -920,9 +976,9 @@ namespace SCB
             }
 
             // Update the status bar
-            statusLabel.Text = message;
+            statusLabel!.Text = message;
             statusLabel.ForeColor = color;
-            statusPanel.Visible = true;
+            statusPanel!.Visible = true;
 
             // Force the status bar to repaint
             statusPanel.Invalidate();
@@ -934,5 +990,10 @@ namespace SCB
             toolTip1.SetToolTip( materialComboBox1, "This selection is fully automated via ingame settings, only use for emergencies" );
         }
 
+        private void CheckBox1_CheckedChanged( object? sender, EventArgs e )
+        {
+            this.materialComboBox1.Enabled = checkBox1.Checked;
+            ColorSelectionPanel.Visible = !checkBox1.Checked;
+        }
     }
 }

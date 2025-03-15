@@ -1,4 +1,5 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 
 
@@ -6,173 +7,196 @@ namespace SCB.Atomics
 {
     using ASC = AtomicSupportClass;
 
-    sealed unsafe partial class AtomicInt64( long value ) : UnsafeAtomicNumerics<long>( value )
+
+#pragma warning disable CS9107
+#pragma warning disable CS0660
+#pragma warning disable CS0661
+    unsafe sealed class AtomicInt64( long value ) : AtomicNumericsBase<long>( value ), IAtomicBaseOperations<long>
     {
-        private bool disposed = false;
-        public Dictionary<ASC.AtomicOps, Func<long, long, long>> SignedArithmeticOperations { get; set; } = ASC.ArithmeticOperations<long>();
-        public Dictionary<ASC.AtomicOps, Func<long, long, long>> SignedBitwiseOperations { get; set; } = ASC.Signed64BitwiseOperations();
-        public Dictionary<ASC.AtomicOps, Func<long, int, long>> SignedShiftOperations { get; set; } = ASC.Signed64ShiftOperations();
+        ///-------Interface-methods-Start------------///
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public long Add( long value )
+        public long Increment( in long value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Add, false, value );
+            if ( IsExtended )
+            {
+                return Interlocked.Add( ref StorageEx->lAtomic, value );
+            } else
+            {
+                return Interlocked.Add( ref Storage->lAtomic, value );
+            }
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public long Decrement( in long value )
+        {
+            if ( IsExtended )
+            {
+                return Interlocked.Add( ref StorageEx->lAtomic, -value );
+            } else
+            {
+                return Interlocked.Add( ref Storage->lAtomic, -value );
+            }
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public long Subtract( long value )
+        public long CompareExchange( in long value, in long comparand )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Subtract, false, value );
+            if ( IsExtended )
+            {
+                return Interlocked.CompareExchange( ref StorageEx->lAtomic, value, comparand );
+            } else
+            {
+                return Interlocked.CompareExchange( ref Storage->lAtomic, value, comparand );
+            }
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public long Multiply( long value )
+        public long Read()
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Multiply, false, value );
+            if ( IsExtended && RefCount > ContentionThreshold )
+            {
+                using var sL = ScopeLock();
+                return Unsafe.Read<long>( &StorageEx->lAtomic );
+            } else if ( IsExtended )
+            {
+                return Interlocked.Read( ref StorageEx->lAtomic );
+            } else
+            {
+                return Interlocked.Read( ref Storage->lAtomic );
+            }
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public long Divide( long value )
+        public void Write( in long value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Divide, false, value );
+            if ( IsExtended && RefCount > ContentionThreshold )
+            {
+                using var sL = ScopeLock();
+                Unsafe.Write( &StorageEx->lAtomic, value );
+            } else if ( IsExtended )
+            {
+                _ = Interlocked.Exchange( ref StorageEx->lAtomic, value );
+            } else
+            {
+                _ = Interlocked.Exchange( ref Storage->lAtomic, value );
+            }
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public long Modulus( long value )
+        public long Supplant( [Optional] in long value, [Optional] in int rsValue, ASC.AtomicOperation aO )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Modulus, false, value );
+            if ( aO == ASC.AtomicOperation.BitShiftL || aO == ASC.AtomicOperation.BitShiftR ||
+                aO == ASC.AtomicOperation.RotateLeft || aO == ASC.AtomicOperation.RotateRight )
+            {
+                return long.MaxValue;
+            }
+
+            long result = aO switch
+            {
+                ASC.AtomicOperation.Addition => ASC.Add( Read(), value ),
+                ASC.AtomicOperation.Subtraction => ASC.Subtract( Read(), value ),
+                ASC.AtomicOperation.Multiplication => ASC.Multiply( Read(), value ),
+                ASC.AtomicOperation.Division => ASC.Divide( Read(), value ),
+                ASC.AtomicOperation.Modulus => ASC.Modulus( Read(), value ),
+                ASC.AtomicOperation.BitwiseAnd => ASC.BitwiseAnd( Read(), value ),
+                ASC.AtomicOperation.BitwiseOr => ASC.BitwiseOr( Read(), value ),
+                ASC.AtomicOperation.BitwiseXor => ASC.BitwiseXor( Read(), value ),
+                ASC.AtomicOperation.BitwiseNot => ASC.BitwiseNot( Read() ),
+                _ => throw new ArgumentOutOfRangeException( nameof( aO ) ),
+            };
+
+            Write( result );
+            return result;
         }
 
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public long And( long value )
-        {
-            return PerformBitwiseOperation( ASC.AtomicOps.And, false, value );
-        }
+        ///------------Interface-methods-End--------------/// 
+
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public long Or( long value )
+        public ScopedAtomicRef<AtomicInt64, long> GetScopedReference()
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.Or, false, value );
+            return new ScopedAtomicRef<AtomicInt64, long>( this );
         }
 
+
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public long Xor( long value )
+        public long Add( in long value )
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.Xor, false, value );
+            return Increment( value );
         }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public long Subtract( in long value )
+        {
+            return Decrement( value );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public long Multiply( in long value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.Multiplication );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public long Divide( in long value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.Division );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public long Modulus( in long value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.Modulus );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public long Max( in long value )
+        {
+            return long.Max( Read(), value );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public long Min( in long value )
+        {
+            return long.Min( Read(), value );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public long And( in long value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.BitwiseAnd );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public long Or( in long value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.BitwiseOr );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public long Xor( in long value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.BitwiseXor );
+        }
+
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public long Not()
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.Not, false, 0 );
+            return Supplant( aO: ASC.AtomicOperation.BitwiseNot );
         }
 
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public long LeftShift( int value )
-        {
-            return PerformShiftOperation( ASC.AtomicOps.LeftShift, false, value );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public long RightShift( int value )
-        {
-            return PerformShiftOperation( ASC.AtomicOps.RightShift, false, value );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public long RotateLeft( int value )
-        {
-            return PerformShiftOperation( ASC.AtomicOps.RotateLeft, false, value );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public long RotateRight( int value )
-        {
-            return PerformShiftOperation( ASC.AtomicOps.RotateRight, false, value );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private long PerformArithmeticOperation( ASC.AtomicOps op, bool overload, long value )
-        {
-            if ( !SignedArithmeticOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            long result = operation( ReadLong(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private long PerformBitwiseOperation( ASC.AtomicOps op, bool overload, long value )
-        {
-            if ( !SignedBitwiseOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            long result = operation( ReadLong(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private long PerformShiftOperation( ASC.AtomicOps op, bool overload, int value )
-        {
-            if ( !SignedShiftOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            long result = operation( ReadLong(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
-        }
-
-        ~AtomicInt64()
-        {
-            Dispose( false );
-        }
-
-        protected override void Dispose( bool disposing )
-        {
-            if ( !disposed &&
-                disposing )
-            {
-                base.Dispose( disposing );
-            }
-            disposed = true;
-        }
-
-        // Object overrides
-
-        public override bool Equals( object? obj )
-        {
-            if ( obj is AtomicInt64 atomic )
-            {
-                return ReadLong() == atomic.ReadLong() &&
-                    GetHashCode() == atomic.GetHashCode();
-            }
-            return false;
-        }
-
-        public override int GetHashCode()
-        {
-            return base.GetHashCode();
-        }
 
         // Overload operators
 
@@ -185,481 +209,483 @@ namespace SCB.Atomics
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( AtomicInt64 atomic, long value )
         {
-            return atomic.ReadLong() == value;
+            return atomic.Read() == value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( AtomicInt64 atomic, long value )
         {
-            return atomic.ReadLong() != value;
+            return atomic.Read() != value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return atomic1.Equals( atomic2 );
+            return atomic1.Read() == atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return !atomic1.Equals( atomic2 );
+            return atomic1.Read() != atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( long value, AtomicInt64 atomic )
         {
-            return value == atomic.ReadLong();
+            return value == atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( long value, AtomicInt64 atomic )
         {
-            return value != atomic.ReadLong();
+            return value != atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( AtomicInt64 atomic, long value )
         {
-            return atomic.ReadLong() > value;
+            return atomic.Read() > value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( AtomicInt64 atomic, long value )
         {
-            return atomic.ReadLong() < value;
+            return atomic.Read() < value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( long value, AtomicInt64 atomic )
         {
-            return value > atomic.ReadLong();
+            return value > atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( long value, AtomicInt64 atomic )
         {
-            return value < atomic.ReadLong();
+            return value < atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return atomic1.ReadLong() > atomic2.ReadLong();
+            return atomic1.Read() > atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return atomic1.ReadLong() < atomic2.ReadLong();
+            return atomic1.Read() < atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( AtomicInt64 atomic, long value )
         {
-            return atomic.ReadLong() >= value;
+            return atomic.Read() >= value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( AtomicInt64 atomic, long value )
         {
-            return atomic.ReadLong() <= value;
+            return atomic.Read() <= value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( long value, AtomicInt64 atomic )
         {
-            return value >= atomic.ReadLong();
+            return value >= atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( long value, AtomicInt64 atomic )
         {
-            return value <= atomic.ReadLong();
+            return value <= atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return atomic1.ReadLong() >= atomic2.ReadLong();
+            return atomic1.Read() >= atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return atomic1.ReadLong() <= atomic2.ReadLong();
+            return atomic1.Read() <= atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator +( AtomicInt64 atomic, long value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Add, true, value );
+            return atomic.Read() + value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator +( long value, AtomicInt64 atomic )
         {
-            return value + atomic.ReadLong();
+            return value + atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator +( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return atomic1.ReadLong() + atomic2.ReadLong();
+            return atomic1.Read() + atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator -( AtomicInt64 atomic, long value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Subtract, true, value );
+            return atomic.Read() - value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator -( long value, AtomicInt64 atomic )
         {
-            return value - atomic.ReadLong();
+            return value - atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator -( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return atomic1.ReadLong() - atomic2.ReadLong();
+            return atomic1.Read() - atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator *( AtomicInt64 atomic, long value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Multiply, true, value );
+            return atomic.Read() * value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator *( long value, AtomicInt64 atomic )
         {
-            return value * atomic.ReadLong();
+            return value * atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator *( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return atomic1.ReadLong() * atomic2.ReadLong();
+            return atomic1.Read() * atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator /( AtomicInt64 atomic, long value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Divide, true, value );
+            return atomic.Read() / value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator /( long value, AtomicInt64 atomic )
         {
-            return value / atomic.ReadLong();
+            return value / atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator /( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return atomic1.ReadLong() / atomic2.ReadLong();
+            return atomic1.Read() / atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator %( AtomicInt64 atomic, long value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Modulus, true, value );
+            return atomic.Read() % value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator %( long value, AtomicInt64 atomic )
         {
-            return value % atomic.ReadLong();
+            return value % atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator %( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return atomic1.ReadLong() % atomic2.ReadLong();
+            return atomic1.Read() % atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator &( AtomicInt64 atomic, long value )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.And, true, value );
+            return atomic.Read() & value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator &( long value, AtomicInt64 atomic )
         {
-            return value & atomic.ReadLong();
+            return value & atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator &( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return atomic1.ReadLong() & atomic2.ReadLong();
+            return atomic1.Read() & atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator |( AtomicInt64 atomic, long value )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.Or, true, value );
+            return atomic.Read() | value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator |( long value, AtomicInt64 atomic )
         {
-            return value | atomic.ReadLong();
+            return value | atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator |( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return atomic1.ReadLong() | atomic2.ReadLong();
+            return atomic1.Read() | atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator ^( AtomicInt64 atomic, long value )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.Xor, true, value );
+            return atomic.Read() ^ value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator ^( long value, AtomicInt64 atomic )
         {
-            return value ^ atomic.ReadLong();
+            return value ^ atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator ^( AtomicInt64 atomic1, AtomicInt64 atomic2 )
         {
-            return atomic1.ReadLong() ^ atomic2.ReadLong();
+            return atomic1.Read() ^ atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator ~( AtomicInt64 atomic )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.Not, true, 0 );
+            return atomic.Not();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator <<( AtomicInt64 atomic, int value )
         {
-            return atomic.PerformShiftOperation( ASC.AtomicOps.LeftShift, true, value );
+            return atomic.Read() << value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static long operator >>( AtomicInt64 atomic, int value )
         {
-            return atomic.PerformShiftOperation( ASC.AtomicOps.RightShift, true, value );
+            return atomic.Read() >> value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static AtomicInt64 operator ++( AtomicInt64 atomic )
         {
-            atomic.Increment();
+            atomic.Increment( 1L );
             return atomic;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static AtomicInt64 operator --( AtomicInt64 atomic )
         {
-            atomic.Decrement();
+            atomic.Decrement( 1L );
             return atomic;
         }
     }
 
 
 
-    sealed unsafe partial class AtomicUint64( ulong value ) : UnsafeAtomicNumerics<ulong>( value )
+    sealed unsafe class AtomicUint64( ulong value ) : AtomicNumericsBase<ulong>( value ), IAtomicBaseOperations<ulong>
     {
-        private bool disposed = false;
-        public Dictionary<ASC.AtomicOps, Func<ulong, ulong, ulong>> UnsignedArithmeticOperations { get; set; } = ASC.ArithmeticOperations<ulong>();
-        public Dictionary<ASC.AtomicOps, Func<ulong, ulong, ulong>> UnsignedBitwiseOperations { get; set; } = ASC.Unsigned64BitwiseOperations();
-        public Dictionary<ASC.AtomicOps, Func<ulong, int, ulong>> UnsignedShiftOperations { get; set; } = ASC.Unsigned64ShiftOperations();
+
+        ///-------Interface-methods-Start------------///
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public ulong Increment( in ulong value )
+        {
+            if ( IsExtended )
+            {
+                return Interlocked.Add( ref StorageEx->ulAtomic, value );
+            } else
+            {
+                return Interlocked.Add( ref Storage->ulAtomic, value );
+            }
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public ulong Decrement( in ulong value )
+        {
+            return Supplant( value, aO: ASC.AtomicOperation.Subtraction );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+
+        public ulong CompareExchange( in ulong value, in ulong comparand )
+        {
+            if ( IsExtended )
+            {
+                return Interlocked.CompareExchange( ref StorageEx->ulAtomic, value, comparand );
+            } else
+            {
+                return Interlocked.CompareExchange( ref Storage->ulAtomic, value, comparand );
+            }
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public ulong Read()
+        {
+            if ( IsExtended && RefCount > ContentionThreshold )
+            {
+                using var sL = ScopeLock();
+                return Unsafe.Read<ulong>( &StorageEx->ulAtomic );
+            } else if ( IsExtended )
+            {
+                return Interlocked.Read( ref StorageEx->ulAtomic );
+            } else
+            {
+                return Interlocked.Read( ref Storage->ulAtomic );
+            }
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public void Write( in ulong value )
+        {
+            if ( IsExtended && RefCount > ContentionThreshold )
+            {
+                using var sL = ScopeLock();
+                Unsafe.Write( &StorageEx->ulAtomic, value );
+            } else if ( IsExtended )
+            {
+                _ = Interlocked.Exchange( ref StorageEx->ulAtomic, value );
+            } else
+            {
+                _ = Interlocked.Exchange( ref Storage->ulAtomic, value );
+            }
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public ulong Supplant( [Optional] in ulong value, [Optional] in int rsValue, ASC.AtomicOperation aO )
+        {
+            ulong result = aO switch
+            {
+                ASC.AtomicOperation.Addition => ASC.Add( Read(), value ),
+                ASC.AtomicOperation.Subtraction => ASC.Subtract( Read(), value ),
+                ASC.AtomicOperation.Multiplication => ASC.Multiply( Read(), value ),
+                ASC.AtomicOperation.Division => ASC.Divide( Read(), value ),
+                ASC.AtomicOperation.Modulus => ASC.Modulus( Read(), value ),
+                ASC.AtomicOperation.BitwiseAnd => ASC.BitwiseAnd( Read(), value ),
+                ASC.AtomicOperation.BitwiseOr => ASC.BitwiseOr( Read(), value ),
+                ASC.AtomicOperation.BitwiseXor => ASC.BitwiseXor( Read(), value ),
+                ASC.AtomicOperation.BitwiseNot => ASC.BitwiseNot( Read() ),
+                ASC.AtomicOperation.BitShiftL => ASC.LeftShift( Read(), rsValue ),
+                ASC.AtomicOperation.BitShiftR => ASC.RightShift( Read(), rsValue ),
+                ASC.AtomicOperation.RotateLeft => ASC.RotateLeft( Read(), rsValue ),
+                ASC.AtomicOperation.RotateRight => ASC.RotateRight( Read(), rsValue ),
+                _ => throw new ArgumentOutOfRangeException( nameof( aO ) ),
+            };
+
+            Write( result );
+            return result;
+        }
+
+
+
+        ///------------Interface-methods-End--------------///
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public ScopedAtomicRef<AtomicUint64, ulong> GetScopedReference()
+        {
+            return new ScopedAtomicRef<AtomicUint64, ulong>( this );
+        }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public ulong Add( ulong value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Add, false, value );
+            return Increment( value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public ulong Subtract( ulong value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Subtract, false, value );
+            return Decrement( value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public ulong Multiply( ulong value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Multiply, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.Multiplication );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public ulong Divide( ulong value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Divide, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.Division );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public ulong Modulus( ulong value )
         {
-            return PerformArithmeticOperation( ASC.AtomicOps.Modulus, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.Modulus );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public ulong Max( ulong value )
         {
-            return ulong.Max( ReadUlong(), value );
+            return ulong.Max( Read(), value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public ulong Min( ulong value )
         {
-            return ulong.Min( ReadUlong(), value );
+            return ulong.Min( Read(), value );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public ulong And( ulong value )
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.And, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.BitwiseAnd );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public ulong Or( ulong value )
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.Or, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.BitwiseOr );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public ulong Xor( ulong value )
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.Xor, false, value );
+            return Supplant( value, aO: ASC.AtomicOperation.BitwiseXor );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public ulong Not()
         {
-            return PerformBitwiseOperation( ASC.AtomicOps.Not, false, 0 );
+            return Supplant( aO: ASC.AtomicOperation.BitwiseNot );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public ulong LeftShift( int value )
         {
-            return PerformShiftOperation( ASC.AtomicOps.LeftShift, false, value );
+            return Supplant( rsValue: value, aO: ASC.AtomicOperation.BitShiftL );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public ulong RightShift( int value )
         {
-            return PerformShiftOperation( ASC.AtomicOps.RightShift, false, value );
+            return Supplant( rsValue: value, aO: ASC.AtomicOperation.BitShiftR );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public ulong RotateLeft( int value )
+        public ulong RightRotate( int value )
         {
-            return PerformShiftOperation( ASC.AtomicOps.RotateLeft, false, value );
+            return Supplant( rsValue: value, aO: ASC.AtomicOperation.RotateRight );
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public ulong RotateRight( int value )
+        public ulong LeftRotate( int value )
         {
-            return PerformShiftOperation( ASC.AtomicOps.RotateRight, false, value );
+            return Supplant( rsValue: value, aO: ASC.AtomicOperation.RotateLeft );
         }
 
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public ulong ShiftLeft( int value )
-        {
-            return PerformShiftOperation( ASC.AtomicOps.LeftShift, false, value );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public ulong ShiftRight( int value )
-        {
-            return PerformShiftOperation( ASC.AtomicOps.RightShift, false, value );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private ulong PerformArithmeticOperation( ASC.AtomicOps op, bool overload, ulong value )
-        {
-            if ( !UnsignedArithmeticOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            ulong result = operation( ReadUlong(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private ulong PerformBitwiseOperation( ASC.AtomicOps op, bool overload, ulong value )
-        {
-            if ( !UnsignedBitwiseOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            ulong result = operation( ReadUlong(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private ulong PerformShiftOperation( ASC.AtomicOps op, bool overload, int value )
-        {
-            if ( !UnsignedShiftOperations.TryGetValue( op, out var operation ) )
-            {
-                throw new InvalidOperationException( "Invalid operation" );
-            }
-
-            ulong result = operation( ReadUlong(), value );
-
-            if ( !overload )
-            {
-                VALUE( result );
-            }
-            return result;
-        }
-
-        ~AtomicUint64()
-        {
-            Dispose( false );
-        }
-
-        protected override void Dispose( bool disposing )
-        {
-            if ( !disposed &&
-                disposing )
-            {
-                base.Dispose( disposing );
-            }
-            disposed = true;
-        }
-
-        // Object overrides
-
-        public override bool Equals( object? obj )
-        {
-            if ( obj is AtomicUint64 atomic )
-            {
-                return ReadUlong() == atomic.ReadUlong() &&
-                    GetHashCode() == atomic.GetHashCode();
-            }
-            return false;
-        }
-
-        public override int GetHashCode()
-        {
-            return base.GetHashCode();
-        }
 
         // Overload operators
 
@@ -672,286 +698,289 @@ namespace SCB.Atomics
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( AtomicUint64 atomic, ulong value )
         {
-            return atomic.ReadUlong() == value;
+            return atomic.Read() == value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( AtomicUint64 atomic, ulong value )
         {
-            return atomic.ReadUlong() != value;
+            return atomic.Read() != value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return atomic1.Equals( atomic2 );
+            return atomic1.Read() == atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return !atomic1.Equals( atomic2 );
+            return atomic1.Read() != atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator ==( ulong value, AtomicUint64 atomic )
         {
-            return value == atomic.ReadUlong();
+            return value == atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator !=( ulong value, AtomicUint64 atomic )
         {
-            return value != atomic.ReadUlong();
+            return value != atomic.Read();
         }
-
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( AtomicUint64 atomic, ulong value )
         {
-            return atomic.ReadUlong() > value;
+            return atomic.Read() > value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( AtomicUint64 atomic, ulong value )
         {
-            return atomic.ReadUlong() < value;
+            return atomic.Read() < value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( ulong value, AtomicUint64 atomic )
         {
-            return value > atomic.ReadUlong();
+            return value > atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( ulong value, AtomicUint64 atomic )
         {
-            return value < atomic.ReadUlong();
+            return value < atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return atomic1.ReadUlong() > atomic2.ReadUlong();
+            return atomic1.Read() > atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return atomic1.ReadUlong() < atomic2.ReadUlong();
+            return atomic1.Read() < atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( AtomicUint64 atomic, ulong value )
         {
-            return atomic.ReadUlong() >= value;
+            return atomic.Read() >= value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( AtomicUint64 atomic, ulong value )
         {
-            return atomic.ReadUlong() <= value;
+            return atomic.Read() <= value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( ulong value, AtomicUint64 atomic )
         {
-            return value >= atomic.ReadUlong();
+            return value >= atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( ulong value, AtomicUint64 atomic )
         {
-            return value <= atomic.ReadUlong();
+            return value <= atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator >=( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return atomic1.ReadUlong() >= atomic2.ReadUlong();
+            return atomic1.Read() >= atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static bool operator <=( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return atomic1.ReadUlong() <= atomic2.ReadUlong();
+            return atomic1.Read() <= atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator +( AtomicUint64 atomic, ulong value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Add, true, value );
+            return atomic.Read() + value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator +( ulong value, AtomicUint64 atomic )
         {
-            return value + atomic.ReadUlong();
+            return value + atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator +( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return atomic1.ReadUlong() + atomic2.ReadUlong();
+            return atomic1.Read() + atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator -( AtomicUint64 atomic, ulong value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Subtract, true, value );
+            return atomic.Read() - value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator -( ulong value, AtomicUint64 atomic )
         {
-            return value - atomic.ReadUlong();
+            return value - atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator -( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return atomic1.ReadUlong() - atomic2.ReadUlong();
+            return atomic1.Read() - atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator *( AtomicUint64 atomic, ulong value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Multiply, true, value );
+            return atomic.Read() * value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator *( ulong value, AtomicUint64 atomic )
         {
-            return value * atomic.ReadUlong();
+            return value * atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator *( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return atomic1.ReadUlong() * atomic2.ReadUlong();
+            return atomic1.Read() * atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator /( AtomicUint64 atomic, ulong value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Divide, true, value );
+            return atomic.Read() / value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator /( ulong value, AtomicUint64 atomic )
         {
-            return value / atomic.ReadUlong();
+            return value / atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator /( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return atomic1.ReadUlong() / atomic2.ReadUlong();
+            return atomic1.Read() / atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator %( AtomicUint64 atomic, ulong value )
         {
-            return atomic.PerformArithmeticOperation( ASC.AtomicOps.Modulus, true, value );
+            return atomic.Read() % value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator %( ulong value, AtomicUint64 atomic )
         {
-            return value % atomic.ReadUlong();
+            return value % atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator %( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return atomic1.ReadUlong() % atomic2.ReadUlong();
+            return atomic1.Read() % atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator &( AtomicUint64 atomic, ulong value )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.And, true, value );
+            return atomic.Read() & value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator &( ulong value, AtomicUint64 atomic )
         {
-            return value & atomic.ReadUlong();
+            return value & atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator &( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return atomic1.ReadUlong() & atomic2.ReadUlong();
+            return atomic1.Read() & atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator |( AtomicUint64 atomic, ulong value )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.Or, true, value );
+            return atomic.Read() | value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator |( ulong value, AtomicUint64 atomic )
         {
-            return value | atomic.ReadUlong();
+            return value | atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator |( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return atomic1.ReadUlong() | atomic2.ReadUlong();
+            return atomic1.Read() | atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator ^( AtomicUint64 atomic, ulong value )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.Xor, true, value );
+            return atomic.Read() ^ value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator ^( ulong value, AtomicUint64 atomic )
         {
-            return value ^ atomic.ReadUlong();
+            return value ^ atomic.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator ^( AtomicUint64 atomic1, AtomicUint64 atomic2 )
         {
-            return atomic1.ReadUlong() ^ atomic2.ReadUlong();
+            return atomic1.Read() ^ atomic2.Read();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator ~( AtomicUint64 atomic )
         {
-            return atomic.PerformBitwiseOperation( ASC.AtomicOps.Not, true, 0 );
+            return atomic.Not();
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator <<( AtomicUint64 atomic, int value )
         {
-            return atomic.PerformShiftOperation( ASC.AtomicOps.LeftShift, true, value );
+            return atomic.Read() << value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static ulong operator >>( AtomicUint64 atomic, int value )
         {
-            return atomic.PerformShiftOperation( ASC.AtomicOps.RightShift, true, value );
+            return atomic.Read() >> value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static AtomicUint64 operator ++( AtomicUint64 atomic )
         {
-            atomic.Increment();
+            atomic.Increment( 1UL );
             return atomic;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public static AtomicUint64 operator --( AtomicUint64 atomic )
         {
-            atomic.Decrement();
+            atomic.Decrement( 1UL );
             return atomic;
         }
     }
+
+#pragma warning restore CS9107
+#pragma warning restore CS0660
+#pragma warning restore CS0661
 }

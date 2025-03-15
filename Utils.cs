@@ -1,10 +1,8 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
-using System.Text;
 using Microsoft.Win32;
-using SCB;
 
 namespace Utils
 {
@@ -32,11 +30,21 @@ namespace Utils
         /// <param name="start">The starting point of the Bezier curve.</param>
         /// <param name="end">The ending point of the Bezier curve.</param>
         /// <param name="controlPoints">A list of control points to define the curve.</param>
-        internal BezierPointCollection( PointF start, PointF end, List<PointF> controlPoints )
+        internal BezierPointCollection( ref PointF start, ref PointF end, ref List<PointF> controlPoints )
         {
             Start = start;
             End = end;
             ControlPoints = controlPoints ?? [];
+        }
+
+        /// <summary>
+        /// Overload constructor for creating an empty Bezier curve collection.
+        /// </summary>
+        internal BezierPointCollection()
+        {
+            Start = new( 0, 0 );
+            End = new( 0, 0 );
+            ControlPoints = [];
         }
 
 
@@ -67,7 +75,7 @@ namespace Utils
         /// <param name="userStart">The user-defined start position used for scaling.</param>
         /// <param name="userEnd">The user-defined end position used for scaling.</param>
         /// <param name="index">The current index of the control point being processed (default is 0).</param>
-        internal void ScaleControlPointsRecursive( List<PointF> controlPoints, PointF startPos,
+        internal static void ScaleControlPointsRecursive( List<PointF> controlPoints, PointF startPos,
             PointF targetPos, PointF userStart, PointF userEnd, int index = 0 )
         {
             if ( index >= controlPoints.Count )
@@ -110,7 +118,7 @@ namespace Utils
             List<PointF> bezierPoints = new( numPoints );
 
             // Create a list that includes start, control, and end points
-            List<PointF> allPoints = new();
+            List<PointF> allPoints = [];
             allPoints.Capacity = ControlPoints.Count + 2;
 
             // Add start point
@@ -150,7 +158,7 @@ namespace Utils
         /// <param name="n">The number of control points minus 1 (i.e., the highest index).</param>
         /// <param name="t">The interpolation factor, between 0 and 1.</param>
         /// <returns>The interpolated point at time t on the curve.</returns>
-        private PointF ComputeBezierRecursive( List<PointF> points, int n, float t )
+        private static PointF ComputeBezierRecursive( List<PointF> points, int n, float t )
         {
             // Base case: if there's only one point, return it
             if ( n == 0 )
@@ -159,7 +167,7 @@ namespace Utils
             }
 
             // Create a list for the next level of points
-            List<PointF> nextLevel = new();
+            List<PointF> nextLevel = [];
             nextLevel.Capacity = n;
 
             // Linear interpolation between each pair of points
@@ -180,44 +188,28 @@ namespace Utils
 
 
 
-
+    /// <summary>
+    /// Custom sleep implementations
+    /// </summary>
     internal static class Watch
     {
-
-        private static Stopwatch? captureWatch;
         private readonly static int optimalSpinCount = Environment.ProcessorCount * 10;
 
 
         /// <summary>
-        /// starts the stopwatch to capture the time at each screenshot.
+        /// Provides a precise microsecond-level sleep function that balances CPU usage and precision
+        /// using active spinning, yielding, and dynamic contention-based spin adjustments.
         /// </summary>
-        internal static void StartCaptureWatch()
-        {
-            captureWatch = Stopwatch.StartNew();
-        }
-
-        internal static void StopCaptureWatch()
-        {
-            captureWatch!.Stop();
-        }
-
-
-        /// <summary>
-        /// returns the time elapsed since the stopwatch was started.
-        /// </summary>
-        /// <returns></returns>
-        internal static double GetCaptureTime()
-        {
-            return captureWatch!.Elapsed.TotalMilliseconds;
-        }
-
-
-        //custom implementation of thread sleep to pause the program execution for a specified number of microseconds without pinning cpu.
-
-        /// <summary>
-        /// Pauses the program execution for a specified number of microseconds.
-        /// </summary>
-        /// <param name="microSeconds">The number of microseconds to sleep.</param>
+        /// <param name="microSeconds">The duration to sleep, specified in microseconds.</param>
+        /// <remarks>
+        /// The method adapts its behavior based on the required sleep duration and system contention:
+        /// <list type="bullet">
+        ///   <item><description>For very short durations, it uses <see cref="Thread.SpinWait"/> with low contention to achieve minimal delay overhead.</description></item>
+        ///   <item><description>For moderate durations, it dynamically adjusts spin count to balance precision and contention.</description></item>
+        ///   <item><description>For higher durations (above 1.5 milliseconds), it yields the CPU using <see cref="Thread.Yield"/> to reduce contention and allow other threads to execute.</description></item>
+        /// </list>
+        /// This approach ensures efficient CPU usage under varying contention levels while maintaining precise sleep timing.
+        /// </remarks>
         internal static void MicroSleep( double microSeconds )
         {
             Stopwatch sleepStopWatch = Stopwatch.StartNew();
@@ -236,15 +228,12 @@ namespace Utils
                 } else if ( microSeconds > 0.01 )
                 {
                     Thread.SpinWait( 1 );
-                } else
-                {
-                    Thread.SpinWait( 0 );
                 }
             }
         }
 
         /// <summary>
-        /// Pauses the program execution for a specified number of nanoseconds.
+        /// Forwards sleep to micro sleep with nanoseconds count
         /// </summary>
         /// <param name="nanoSeconds">The number of nanoseconds to sleep.</param>
         internal static void NanoSleep( double nanoSeconds )
@@ -253,7 +242,7 @@ namespace Utils
         }
 
         /// <summary>
-        /// Pauses the program execution for a specified number of seconds.
+        /// Forwards sleep to micro sleep with seconds count
         /// </summary>
         /// <param name="seconds">The number of seconds to sleep.</param>
         internal static void SecondsSleep( double seconds )
@@ -262,12 +251,68 @@ namespace Utils
         }
 
         /// <summary>
-        /// Pauses the program execution for a specified number of milliseconds.
+        /// Forwards sleep to micro sleep with milliseconds count
         /// </summary>
         /// <param name="milliseconds">The number of milliseconds to sleep.</param>
         internal static void MilliSleep( double milliseconds )
         {
             MicroSleep( milliseconds * 1000.0 );
+        }
+
+
+        /// <summary>
+        /// For async sleep operations
+        /// Swapped  <see cref="Thread.Yield"/> for <see cref="Task.Yield"/>
+        /// To keep it async
+        /// <see cref="MicroSleep"/>
+        /// </summary>
+        internal static async Task AsyncMicroSleep( double microSeconds )
+        {
+            Stopwatch sleepStopWatch = Stopwatch.StartNew();
+            long ticks = ( long ) ( microSeconds * Stopwatch.Frequency / 1000000 );
+            int spinCount = 0;
+            while ( sleepStopWatch.ElapsedTicks < ticks )
+            {
+                spinCount++;
+
+                if ( ticks > ( ( Stopwatch.Frequency / 1000 ) * 1.5 ) )
+                {
+                    await Task.Yield();
+                } else if ( spinCount > optimalSpinCount )
+                {
+                    Thread.SpinWait( spinCount << 1 );
+                } else if ( microSeconds > 0.01 )
+                {
+                    Thread.SpinWait( 1 );
+                }
+            }
+        }
+
+        /// <summary>
+        /// For async sleep operations
+        /// <see cref="NanoSleep"/>
+        /// </summary>
+        internal static async Task AsyncNanoSleep( double nanoSeconds )
+        {
+            await AsyncMicroSleep( nanoSeconds / 1000.0 );
+        }
+
+        /// <summary>
+        /// For async sleep operations
+        /// <see cref="SecondsSleep"/>
+        /// </summary>
+        internal static async Task AsyncSecondsSleep( double seconds )
+        {
+            await AsyncMicroSleep( seconds * 1000000.0 );
+        }
+
+        /// <summary>
+        /// For async sleep operations
+        /// <see cref="MilliSleep"/>
+        /// </summary>
+        internal static async Task AsyncMilliSleep( double milliseconds )
+        {
+            await AsyncMicroSleep( milliseconds * 1000.0 );
         }
     }
 
@@ -323,7 +368,7 @@ namespace Utils
         }
     }
 
-    internal static class DarkMode
+    internal static partial class DarkMode
     {
         /// <summary>
         /// Determines if the current theme is using light mode.
@@ -378,253 +423,7 @@ namespace Utils
         /// <param name="attrValue">A reference to the value to set.</param>
         /// <param name="attrSize">The size of the attribute value in bytes.</param>
         /// <returns>Returns 0 if the function succeeds, otherwise a non-zero error code.</returns>
-        [DllImport( "dwmapi.dll" )]
+        [DllImport( "dwmapi.dll", SetLastError = true )]
         private static extern int DwmSetWindowAttribute( nint hwnd, int attr, ref int attrValue, int attrSize );
-    }
-
-
-
-    internal static class UtilsThreads
-    {
-        internal static void UiSmartKey( NotifyIcon trayIcon, IceColorBot mainClass )
-        {
-            int insert = MouseInput.VK_INSERT;
-            bool isKeyPressed = false;
-
-            while ( !Environment.HasShutdownStarted )
-            {
-                // Check if the INSERT key is pressed
-                if ( MouseInput.IsKeyPressed( ref insert ) )
-                {
-                    // Only toggle if the key wasn't pressed in the last loop iteration
-                    if ( !isKeyPressed )
-                    {
-                        mainClass.Invoke( new Action( () =>
-                        {
-                            if ( mainClass.Visible )
-                            {
-                                mainClass.Hide();
-                                trayIcon.Visible = true;
-                                mainClass.WindowState = FormWindowState.Minimized;  // Minimize the form
-                            } else
-                            {
-                                MouseInput.ShowTaskbarViaShortcut();
-                                Thread.Sleep( 100 );
-                                mainClass.Show();
-                                mainClass.WindowState = FormWindowState.Normal;  // Restore the form
-                                mainClass.Activate();
-                                mainClass.BringToFront();
-                                SetWindowPos( mainClass.Handle, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE );
-
-
-                                trayIcon.Visible = false;
-                            }
-                        } ) );
-
-                        isKeyPressed = true;  // Mark that the key has been pressed
-                    }
-                } else
-                {
-                    isKeyPressed = false;  // Reset state when the key is released
-                }
-
-                // Small delay to prevent high CPU usage
-                Thread.Sleep( 10 );
-            }
-        }
-
-
-
-        internal static void SmartGameCheck( ref FileManager fileManager )
-        {
-            string gameSettingsMD5 = fileManager.GetFileMD5Hash( FileManager.gameSettingsFile );
-#if DEBUG
-            Logger.Log( $"Smart Game Check Thread Started, File Hash: {gameSettingsMD5}" );
-#endif
-
-            PInvoke.RECT rect = new();
-            nint firstHwnd;
-            while ( !Environment.HasShutdownStarted )
-            {
-                firstHwnd = FindWindow();
-
-                if ( firstHwnd == PlayerData.GetHwnd() )
-                {
-                    Thread.Sleep( 1000 );
-
-
-                    if ( firstHwnd != nint.MaxValue &&
-                        GetWindowRect( PlayerData.GetHwnd(), ref rect ) &&
-                        PlayerData.GetRect().left != rect.left ||
-                            PlayerData.GetRect().right != rect.right ||
-                            PlayerData.GetRect().top != rect.top ||
-                            PlayerData.GetRect().bottom != rect.bottom )
-                    {
-                        PlayerData.SetRect( rect );
-#if DEBUG
-                        Logger.Log( "Game Rect Changed" );
-#endif 
-                    }
-
-                    // check if player changed settings, if so, reload settings
-                    string gameSettingsMD5New = fileManager.GetFileMD5Hash( FileManager.gameSettingsFile );
-                    if ( gameSettingsMD5New != gameSettingsMD5 )
-                    {
-                        gameSettingsMD5 = gameSettingsMD5New;
-                        var gameSettings = fileManager.GetInGameSettings();
-                        var outlineColor = fileManager.GetEnemyOutlineColor();
-
-                        // Get current Settings
-                        var currentAimSettings = PlayerData.GetAimSettings();
-                        var currentOutlineColor = PlayerData.GetOutlineColor();
-
-                        if ( outlineColor.colorName != currentOutlineColor )
-                        {
-                            // Set new outline color
-                            PlayerData.SetOutlineColor( outlineColor.colorName == "custom" ? outlineColor.Rgb : outlineColor.colorName ); // If the user is using custom rgb we send the rgb values through to translate into a tolerance
-                        } else if ( ( float.Abs( gameSettings.mouseSens - currentAimSettings.mouseSens ) > 0.001f || float.Abs( gameSettings.adsScale - currentAimSettings.adsScale ) > 0.001f ) )
-                        {
-                            // Set the new settings
-                            PlayerData.SetMouseSens( gameSettings.mouseSens );
-                            PlayerData.SetAdsScale( gameSettings.adsScale );
-                        }
-#if DEBUG
-                        Logger.Log( "Game Settings Changed" );
-                        Logger.Log( $"New Game Settings File Hash: {gameSettingsMD5}" );
-#endif
-                    }
-
-                    continue;
-                }
-
-
-
-                if ( firstHwnd != nint.MaxValue && PlayerData.GetHwnd() == nint.MaxValue )
-                {
-                    PlayerData.SetHwnd( firstHwnd );
-
-                    if ( !GetWindowRect( PlayerData.GetHwnd(), ref rect ) )
-                    {
-                        ErrorHandler.HandleException( new Exception( "Error getting window rect" ) );
-                    }
-                    PlayerData.SetRect( rect );
-#if DEBUG
-                    Logger.Log( "Game is active with HWND: " + PlayerData.GetHwnd() );
-#endif
-                }
-
-                Thread.Sleep( 10000 );
-
-                if ( firstHwnd == nint.MaxValue && PlayerData.GetHwnd() != nint.MaxValue )
-                {
-
-                    PlayerData.SetHwnd( firstHwnd );
-#if DEBUG
-                    Logger.Log( "Game is not active" );
-#endif
-                }
-            }
-        }
-
-        /// <summary>
-        /// Sets the position, size, and Z order of a specified window.
-        /// This function allows you to change the position of a window in relation to the screen and other windows.
-        /// </summary>
-        /// <param name="hWnd">A handle to the window that should be moved.</param>
-        /// <param name="hWndInsertAfter">
-        /// </param>
-        /// <param name="X">The new position of the left side of the window, in screen coordinates.</param>
-        /// <param name="Y">The new position of the top of the window, in screen coordinates.</param>
-        /// <param name="cx">The new width of the window, in pixels. If set to zero, the width will not change.</param>
-        /// <param name="cy">The new height of the window, in pixels. If set to zero, the height will not change.</param>
-        /// <param name="uFlags">Flags specifying window sizing and positioning options. Common values include:
-        /// </param>
-        /// <returns>Returns `true` if the function succeeds, or `false` otherwise.</returns>
-        [DllImport( "user32.dll" )]
-        private static extern bool SetWindowPos( nint hWnd, int hWndInsertAfter, int X, int Y, int cx, int cy, int uFlags );
-
-
-        /// <summary>
-        /// Retrieves the dimensions of the bounding rectangle of the specified window.
-        /// </summary>
-        /// <param name="hWnd">A handle to the window.</param>
-        /// <param name="lpRect">A pointer to a RECT structure that receives the dimensions of the bounding rectangle.</param>
-        /// <returns>Returns true if the function succeeds, otherwise false.</returns>
-        [DllImport( "user32.dll" )]
-        private static extern bool GetWindowRect( nint hWnd, ref PInvoke.RECT lpRect );
-
-        // Delegate for EnumWindows callback
-        private delegate bool EnumWindowsProc( nint hWnd, nint lParam );
-
-        /// <summary>
-        /// Enumerates all top-level windows on the screen by passing their handles to an application-defined callback function.
-        /// </summary>
-        /// <param name="lpEnumFunc">A pointer to an application-defined callback function.</param>
-        /// <param name="lParam">An application-defined value to be passed to the callback function.</param>
-        /// <returns>Returns true if the function succeeds, otherwise false.</returns>
-        [DllImport( "user32.dll" )]
-        private static extern bool EnumWindows( EnumWindowsProc lpEnumFunc, nint lParam );
-
-        /// <summary>
-        /// Copies the text of the specified window's title bar (if it has one) into a buffer.
-        /// </summary>
-        /// <param name="hWnd">A handle to the window or control containing the text.</param>
-        /// <param name="lpString">The buffer that will receive the text.</param>
-        /// <param name="nMaxCount">The maximum number of characters to copy to the buffer.</param>
-        /// <returns>If the function succeeds, the return value is the length, in characters, of the copied string.</returns>
-        [DllImport( "user32.dll" )]
-        private static extern int GetWindowText( nint hWnd, StringBuilder lpString, int nMaxCount );
-
-        /// <summary>
-        /// Retrieves the title of the specified window.
-        /// </summary>
-        /// <param name="hWnd">A handle to the window.</param>
-        /// <returns>The window title as a string.</returns>
-        private static string GetWindowTitle( nint hWnd )
-        {
-            StringBuilder sb = new( 256 );
-            GetWindowText( hWnd, sb, 256 );
-            return sb.ToString();
-        }
-
-        /// <summary>
-        /// Finds the window with a title containing the keyword "Spectre".
-        /// </summary>
-        /// <returns>A handle to the found window, or nint.MaxValue if not found.</returns>
-        private static nint FindWindow()
-        {
-            nint hwnd = nint.MaxValue;
-            EnumWindows( delegate ( nint wnd, nint param )
-            {
-                string title = GetWindowTitle( wnd );
-                if ( title.Contains( "Spectre" ) )
-                {
-                    hwnd = wnd;
-                    return false;
-                }
-                return true;
-            }, nint.Zero );
-
-            return hwnd;
-        }
-
-        // constants for SetWindowPos
-        private const int HWND_TOP = 0;
-        private const int SWP_NOMOVE = 0x0002;
-        private const int SWP_NOSIZE = 0x0001;
-    }
-
-
-    internal static class SafeReleaseHelper
-    {
-        internal static readonly Action<IDisposable?> SafeDispose = obj =>
-        {
-            if ( obj is not null )
-            {
-                obj.Dispose();
-                obj = default!;
-            }
-        };
-
     }
 }

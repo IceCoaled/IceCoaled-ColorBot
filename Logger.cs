@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 
 namespace SCB
@@ -6,7 +6,7 @@ namespace SCB
     /// <summary>
     /// Class to handle logging messages to the console.
     /// </summary>
-    internal static class Logger
+    internal static partial class Logger
     {
         readonly private static CancellationTokenSource cancellation = new();
         readonly private static ConcurrentQueue<string> queue = new();
@@ -65,7 +65,7 @@ namespace SCB
         /// </summary>
         internal static void CleanUp()
         {
-            if ( thread != null )
+            if ( thread is not null )
             {
                 cancellation.Cancel();
                 thread.Join();
@@ -80,21 +80,23 @@ namespace SCB
         /// Allocates a new console for the calling process.
         /// </summary>
         /// <returns>If the function succeeds, the return value is true, otherwise false.</returns>
-        [DllImport( "kernel32.dll" )]
+        [DllImport( "kernel32.dll", SetLastError = true )]
+        [return: MarshalAs( UnmanagedType.Bool )]
         private static extern bool AllocConsole();
 
         /// <summary>
         /// Frees the console associated with the calling process.
         /// </summary>
         /// <returns>If the function succeeds, the return value is true, otherwise false.</returns>
-        [DllImport( "kernel32.dll" )]
+        [DllImport( "kernel32.dll", SetLastError = true )]
+        [return: MarshalAs( UnmanagedType.Bool )]
         private static extern bool FreeConsole();
 
         /// <summary>
         /// Retrieves the window handle used by the console associated with the calling process.
         /// </summary>
         /// <returns>A handle to the console window, or null if there is no console.</returns>
-        [DllImport( "kernel32.dll" )]
+        [DllImport( "kernel32.dll", SetLastError = true )]
         private static extern nint GetConsoleWindow();
 
         /// <summary>
@@ -103,7 +105,8 @@ namespace SCB
         /// <param name="hWnd">A handle to the window.</param>
         /// <param name="nCmdShow">The command to set the window state.</param>
         /// <returns>If the window was previously visible, the return value is non-zero, otherwise 0.</returns>
-        [DllImport( "user32.dll" )]
+        [DllImport( "user32.dll", SetLastError = true )]
+        [return: MarshalAs( UnmanagedType.Bool )]
         private static extern bool ShowWindow( nint hWnd, int nCmdShow );
 
         // Show window visibility setting   

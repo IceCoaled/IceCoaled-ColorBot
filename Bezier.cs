@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Drawing.Drawing2D;
 
 namespace SCB
@@ -8,7 +8,7 @@ namespace SCB
         [DesignerSerializationVisibility( DesignerSerializationVisibility.Hidden )]
         internal bool UserSelected { get; set; } = false;
 
-        private Utils.BezierPointCollection bezierPoints;
+        private Utils.BezierPointCollection? bezierPoints;
         private bool isDragging = false;
         private string dragPointName = "";
 
@@ -64,7 +64,7 @@ namespace SCB
                     new PointF(endPoint.X - 50, endPoint.Y + 100),     // Another small nudge toward the left
                     new PointF(endPoint.X + 30, endPoint.Y + 50)       // Slight nudge back towards the center
                 };
-                bezierPoints = new Utils.BezierPointCollection( startPoint, endPoint, controlPoints );
+                bezierPoints = new Utils.BezierPointCollection( ref startPoint, ref endPoint, ref controlPoints );
             }
 
 
@@ -74,7 +74,7 @@ namespace SCB
         private void BezierControlForm_MouseDown( object? sender, MouseEventArgs e )
         {
 
-            if ( IsPointNear( e.Location, bezierPoints.Start ) )
+            if ( IsPointNear( e.Location, bezierPoints!.Start ) )
             {
                 isDragging = true;
                 dragPointName = "startPoint";
@@ -106,35 +106,35 @@ namespace SCB
                 switch ( dragPointName )
                 {
                     case "startPoint":
-                    bezierPoints.Start = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
+                    bezierPoints!.Start = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
                     UserSelected = true;
                     break;
                     case "endPoint":
-                    bezierPoints.End = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
+                    bezierPoints!.End = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
                     UserSelected = true;
                     break;
                     case "controlPoint1":
-                    bezierPoints.ControlPoints[ 0 ] = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
+                    bezierPoints!.ControlPoints[ 0 ] = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
                     UserSelected = true;
                     break;
                     case "controlPoint2":
-                    bezierPoints.ControlPoints[ 1 ] = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
+                    bezierPoints!.ControlPoints[ 1 ] = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
                     UserSelected = true;
                     break;
                     case "controlPoint3":
-                    bezierPoints.ControlPoints[ 2 ] = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
+                    bezierPoints!.ControlPoints[ 2 ] = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
                     UserSelected = true;
                     break;
                     case "controlPoint4":
-                    bezierPoints.ControlPoints[ 3 ] = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
+                    bezierPoints!.ControlPoints[ 3 ] = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
                     UserSelected = true;
                     break;
                     case "controlPoint5":
-                    bezierPoints.ControlPoints[ 4 ] = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
+                    bezierPoints!.ControlPoints[ 4 ] = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
                     UserSelected = true;
                     break;
                     case "controlPoint6":
-                    bezierPoints.ControlPoints[ 5 ] = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
+                    bezierPoints!.ControlPoints[ 5 ] = ClampToBounds( new PointF( e.X, e.Y ) ); // Clamp to bounds if necessary
                     UserSelected = true;
                     break;
                 }
@@ -194,7 +194,7 @@ namespace SCB
 
 
             // Calculate Bezier curve points
-            List<PointF> pointsToDraw = bezierPoints.CalculateOcticBezierPoints( 20 );
+            List<PointF> pointsToDraw = bezierPoints!.CalculateOcticBezierPoints( 20 );
 
             // Draw auxiliary lines between control points
             g.DrawLine( auxiliaryPen, bezierPoints.Start, bezierPoints.ControlPoints[ 0 ] );
@@ -256,7 +256,7 @@ namespace SCB
         {
             base.OnFormClosed( e );
 
-            PlayerData.SetBezierPoints( bezierPoints );
+            PlayerData.SetBezierPoints( bezierPoints! );
         }
 
 
@@ -266,7 +266,7 @@ namespace SCB
             Pen tangentPen = new( Color.Red, 2 );
 
             // We are calculating tangents using control points alignment with auxiliary lines
-            for ( int i = 0; i < bezierPoints.ControlPoints.Count; i++ )
+            for ( int i = 0; i < bezierPoints!.ControlPoints.Count; i++ )
             {
                 // Control points before and after to estimate the tangent
                 PointF prevPoint = i == 0 ? bezierPoints.Start : bezierPoints.ControlPoints[ i - 1 ];

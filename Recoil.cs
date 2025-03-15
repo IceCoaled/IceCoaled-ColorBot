@@ -1,5 +1,6 @@
-﻿#if DEBUG
+#if DEBUG
 //#define GETRECOILPATTERN
+#define GUNNAME_SAVE
 #endif
 
 using System.Drawing.Imaging;
@@ -12,7 +13,7 @@ using Tesseract;
 
 namespace Recoil
 {
-    internal class ScreenCaptureOCR : IDisposable
+    internal partial class ScreenCaptureOCR : IDisposable
     {
         private bool disposed;
         internal PInvoke.RECT GameRect { get; set; }
@@ -51,21 +52,24 @@ namespace Recoil
         private static string PerformOCR( ref Rectangle captureArea )
         {
             Bitmap screenshot = new( captureArea.Width, captureArea.Height, PixelFormat.Format32bppArgb );
+#if  GUNNAME_SAVE
+            screenshot.Save( FileManager.recoilFolder + "\\GunName.png", System.Drawing.Imaging.ImageFormat.Png );
+#endif
             try
             {
                 // Capture the region from the screen into the bitmap
                 CaptureScreenRegion( ref captureArea, ref screenshot );
 
                 // Preprocess the image (convert to grayscale, thresholding, etc.)
-                Bitmap processedImage = PreprocessImage( ref screenshot );
+                PreprocessImage( ref screenshot );
                 try
                 {
                     // Perform OCR using Tesseract
-                    return ExtractTextFromImage( ref processedImage );
+                    return ExtractTextFromImage( ref screenshot );
                 } finally
                 {
                     // Manually dispose processedImage
-                    processedImage.Dispose();
+                    screenshot.Dispose();
                 }
             } finally
             {
@@ -90,38 +94,37 @@ namespace Recoil
         /// <summary>
         /// Preprocess the image to grayscale and apply thresholding, with minimal copying.
         /// </summary>
-        private static Bitmap PreprocessImage( ref Bitmap img )
+        private static void PreprocessImage( ref Bitmap img )
         {
             // Convert to grayscale, apply thresholding
-            Bitmap grayImage = new Bitmap( img.Width, img.Height );
-            using ( Graphics g = Graphics.FromImage( grayImage ) )
+            using ( Graphics g = Graphics.FromImage( img ) )
             {
-                ColorMatrix colorMatrix = new ColorMatrix(
-                    new float[][]{
-            new float[] {0.3f, 0.3f, 0.3f, 0, 0},
-            new float[] {0.59f, 0.59f, 0.59f, 0, 0},
-            new float[] {0.11f, 0.11f, 0.11f, 0, 0},
-            new float[] {0, 0, 0, 1, 0},
-            new float[] {0, 0, 0, 0, 1}
-                    } );
-                ImageAttributes attributes = new ImageAttributes();
+                ColorMatrix colorMatrix = new
+                (
+                    [
+                        [0.3f, 0.3f, 0.3f, 0, 0],
+                        [0.59f, 0.59f, 0.59f, 0, 0],
+                        [0.11f, 0.11f, 0.11f, 0, 0],
+                        [0, 0, 0, 1, 0],
+                        [0, 0, 0, 0, 1]
+                    ]
+                );
+                ImageAttributes attributes = new();
                 attributes.SetColorMatrix( colorMatrix );
                 g.DrawImage( img, new Rectangle( 0, 0, img.Width, img.Height ), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel, attributes );
             }
 
             // Apply thresholding to increase contrast
-            for ( int x = 0; x < grayImage.Width; x++ )
+            for ( int x = 0; x < img.Width; x++ )
             {
-                for ( int y = 0; y < grayImage.Height; y++ )
+                for ( int y = 0; y < img.Height; y++ )
                 {
-                    Color pixelColor = grayImage.GetPixel( x, y );
+                    Color pixelColor = img.GetPixel( x, y );
                     int thresholdValue = 150; // Adjust threshold if necessary
                     int newColorValue = ( pixelColor.R + pixelColor.G + pixelColor.B ) / 3 < thresholdValue ? 0 : 255;
-                    grayImage.SetPixel( x, y, Color.FromArgb( newColorValue, newColorValue, newColorValue ) );
+                    img.SetPixel( x, y, Color.FromArgb( newColorValue, newColorValue, newColorValue ) );
                 }
             }
-
-            return grayImage;
         }
 
 
@@ -176,6 +179,8 @@ namespace Recoil
                 return "M49 FURY\n";
                 case "M667 REAVER\n":
                 return "M67 REAVER\n";
+                default:
+                break;
                 //no default just in case
             }
 
@@ -250,7 +255,7 @@ namespace Recoil
     /// <summary>
     /// Represents a recoil pattern with a list of positions and total time.
     /// </summary>
-    internal class RecoilPattern : IDisposable
+    internal partial class RecoilPattern : IDisposable
     {
         private bool disposed;
 
@@ -312,30 +317,41 @@ namespace Recoil
     }
 
 
-    internal class RecoilPatternProcessor
+    internal partial class RecoilPatternProcessor : IDisposable
     {
-        public event EventHandler<RecoilPattern> RecoilPatternChanged;
+        private bool Disposed { get; set; } = false;
 
-        private Dictionary<string, RecoilPattern> patternDatabase = [];
+        // Recoil detection thread
+        private Thread RecoilDetection { get; init; }
+        internal CancellationTokenSource RecoilPatternSource { get; set; } = new();
+
+        // recoil changed event for aiming features to sub to
+        public event EventHandler<RecoilPattern> RecoilPatternChanged = delegate { };//< Shutting the compiler up
+
+        // Recoil Database
+        private readonly Dictionary<string, RecoilPattern> patternDatabase = [];
         private readonly object databaseLock = new();
 
         //original window size is static at 1440x2560       
         private PInvoke.RECT OriginalWindowRect { get; set; } = new() { left = 0, top = 0, right = 2560, bottom = 1440 };
-        internal CancellationTokenSource RecoilPatternSource { get; set; } = new();
 
+        // For aiming features to get recoil pattern
         private readonly object RecoilPatternLock = new();
         private RecoilPattern? currentPattern = null;
 
         internal RecoilPatternProcessor()
         {
-            // Start the thread to monitor the recoil pattern
-            Task.Run( async () => await RecoilPatternThread() );
+            // Read and process all recoil patterns
+            ProcessAllGunPatterns();
+
+            // Start the thread to monitor the recoil pattern           
+            RecoilDetection = new( RecoilPatternThread );
+            RecoilDetection.Start();
         }
 
         ~RecoilPatternProcessor()
         {
-            RecoilPatternSource.Cancel();
-            RecoilPatternSource.Dispose();
+            Dispose( false );
         }
 
         private void RecoilPatternChangedHandler( RecoilPattern pattern )
@@ -352,18 +368,30 @@ namespace Recoil
             // Get all subdirectories (which represent each gun folder)
             string[] gunFolders = Directory.GetDirectories( FileManager.recoilPatterns );
 
-            Parallel.ForEach( gunFolders, gunFolder =>
+            ParallelOptions parallelOptions = new()
             {
-                ProcessGunPatterns( gunFolder );
-            } );
+                MaxDegreeOfParallelism = Environment.ProcessorCount,
+            };
+
+            try
+            {
+                Parallel.ForEach( gunFolders, parallelOptions, gunFolder =>
+                {
+                    ProcessGunPatterns( gunFolder );
+                } );
+            } catch ( Exception ex )
+            {
+                ErrorHandler.HandleException( ex );
+            }
+
         }
 
         /// <summary>
         /// Processes all patterns for a specific gun folder, averages them, and stores them in the database.
         /// </summary>
-        internal void ProcessGunPatterns( string gunFolder )
+        private void ProcessGunPatterns( string gunFolder )
         {
-            List<RecoilPattern> patterns = new();
+            List<RecoilPattern> patterns = [];
 
             for ( int i = 1; i < 4; i++ )
             {
@@ -376,71 +404,77 @@ namespace Recoil
                 Logger.Log( $"Processed pattern: {patternFile}" );
 #endif
 
-                if ( patternFile == "./recoil/patterns\\CRUSADER\\CRUSADER-3.txt" )
-                {
-                    continue; //< debug
-                }
             }
 
-            while ( Monitor.TryEnter( RecoilPatternLock, 2000 ) == false )
+            bool locktaken = false;
+            try
             {
-                Thread.Sleep( 1 );
+
+                Monitor.Enter( RecoilPatternLock, ref locktaken );
+
                 lock ( databaseLock )
                 {
                     patternDatabase[ Path.GetFileName( gunFolder ) ] = AveragePatterns( patterns );
                 }
+            } finally
+            {
+                if ( locktaken )
+                {
+                    Monitor.Exit( RecoilPatternLock );
+                }
             }
+
+
         }
 
 
         /// <summary>
         /// Reads a recoil pattern from a text file based on the given format.
         /// </summary>
-        public RecoilPattern ReadFromFile( string filePath )
+        private static RecoilPattern ReadFromFile( string filePath )
         {
 
             // Create a dictionary to store the pattern
-            Dictionary<PointF, double> pattern = new();
+            Dictionary<PointF, double> pattern = [];
 
             try
             {
-                using ( StreamReader reader = new( filePath ) )
+                using StreamReader reader = new( filePath );
+                string? line;
+
+                while ( ( line = reader.ReadLine() ) is not null )
                 {
-                    string? line;
-
-                    while ( ( line = reader.ReadLine() ) != null )
+                    line = line.Trim();
+                    try
                     {
-                        try
+                        if ( line.StartsWith( "Position:" ) )
                         {
-                            if ( line.StartsWith( "Position:" ) )
+                            // Extract X, Y, and Time
+                            string[] parts = line.Split( [ 'X', 'Y', '=', ',', '{', '}', ' ' ], StringSplitOptions.RemoveEmptyEntries );
+                            float x = float.Parse( parts[ 1 ] );
+                            float y = float.Parse( parts[ 2 ] );
+                            double time = double.Parse( parts[ 4 ] );
+
+                            if ( pattern.ContainsKey( new PointF( x, y ) ) )
                             {
-                                // Extract X, Y, and Time
-                                string[] parts = line.Split( new[] { 'X', 'Y', '=', ',', '{', '}', ' ' }, StringSplitOptions.RemoveEmptyEntries );
-                                float x = float.Parse( parts[ 1 ] );
-                                float y = float.Parse( parts[ 2 ] );
-                                double time = double.Parse( parts[ 4 ] );
-
-                                if ( pattern.ContainsKey( new PointF( x, y ) ) )
+                                continue;
+                            } else
+                            {
+                                // Add the position and time to the lists
+                                if ( !pattern.TryAdd( new PointF( x, y ), time ) )
                                 {
-                                    continue;
-                                } else
-                                {
-                                    // Add the position and time to the lists
-                                    if ( !pattern.TryAdd( new PointF( x, y ), time ) )
-                                    {
-                                        ErrorHandler.HandleException( new Exception( "Failed to add position to pattern" ) );
-                                    }
+                                    ErrorHandler.HandleException( new Exception( "Failed to add position to pattern" ) );
                                 }
-                                Thread.Sleep( 1 ); // Dont pin the CPU
                             }
-
-                        } catch ( FormatException ex )
-                        {
-                            ErrorHandler.HandleException( ex );
-                        } catch ( IndexOutOfRangeException ex )
-                        {
-                            ErrorHandler.HandleException( ex );
+                            Utils.Watch.MilliSleep( 1 ); // Dont pin the CPU
                         }
+
+                    } catch ( FormatException ex )
+                    {
+                        ErrorHandler.HandleException( ex );
+                    } catch ( IndexOutOfRangeException ex )
+                    {
+                        ErrorHandler.HandleException( ex );
                     }
                 }
             } catch ( IOException ex )
@@ -455,7 +489,7 @@ namespace Recoil
         /// <summary>
         /// Averages multiple recoil patterns into a single pattern.
         /// </summary>
-        internal RecoilPattern AveragePatterns( List<RecoilPattern> patterns )
+        private static RecoilPattern AveragePatterns( List<RecoilPattern> patterns )
         {
             // Use the pattern with the least positions, to avoid out of range exceptions
             // We know there is only 3 patterns, so we can hardcode it
@@ -482,7 +516,7 @@ namespace Recoil
                     averagedPattern.TryAdd( new PointF( cumulX, cumulY ), cumulTime );
                 }
 
-                Thread.Sleep( 1 ); // Dont pin the CPU
+                Utils.Watch.MilliSleep( 1 ); // Dont pin the CPU
             }
 
 
@@ -547,26 +581,23 @@ namespace Recoil
         }
 
 
-        internal async Task RecoilPatternThread()
+        private void RecoilPatternThread()
         {
-            // Process all patterns and store them in the database
-            ProcessAllGunPatterns();
-
-            List<string> CurrentAddedGuns = new()
-            {
+            List<string> CurrentAddedGuns =
+            [
                 "BERSERKER RB3", "BLACKOUT", "BUZZSAW RT40", "CRUSADER",
                 "CYCLONE", "M25 HORNET", "M49 FURY", "M67 REAVER", "WHISPER"
-            };
+            ];
 
-            int buyKey = MouseInput.VK_B;
-            int escapeKey = MouseInput.VK_ESCAPE;
-            int backupKey = MouseInput.VK_F1;
+            int buyKey = HidInputs.VK_B;
+            int escapeKey = HidInputs.VK_ESCAPE;
+            int backupKey = HidInputs.VK_F1;
 
 
             // Wait for the game window to be detected
             while ( PlayerData.GetHwnd() == nint.MaxValue )
             {
-                Thread.Sleep( 5000 );
+                Utils.Watch.SecondsSleep( 5 );
             }
 
 
@@ -587,9 +618,9 @@ namespace Recoil
             // Automatically monitor the screen for weapon name changes
             while ( !RecoilPatternSource.Token.IsCancellationRequested )
             {
-                if ( MouseInput.IsKeyPressed( ref buyKey ) )
+                if ( HidInputs.IsKeyPressed( ref buyKey ) )
                 {
-                    await HandleBuyState( escapeKey );
+                    HandleBuyState( escapeKey );
                     // Automatically check for weapon name change using OCR
                     string weaponName = screenCaptureOCR.PerformOCRForWeaponName();
                     if ( !CurrentAddedGuns.Contains( weaponName ) )
@@ -612,7 +643,7 @@ namespace Recoil
                 }
 
                 // If the scan doesnt pick up the weapon name, press F1 to try again
-                if ( MouseInput.IsKeyPressed( ref backupKey ) )
+                if ( HidInputs.IsKeyPressed( ref backupKey ) )
                 {
                     string weaponName = screenCaptureOCR.PerformOCRForWeaponName();
                     if ( !CurrentAddedGuns.Contains( weaponName ) )
@@ -644,7 +675,7 @@ namespace Recoil
                     screenCaptureOCR.GameRect = gameRect;
                 }
 
-                await Task.Delay( 500 ); // Adjust interval for how often you want to check the weapon name
+                Utils.Watch.MilliSleep( 500 ); // Adjust interval for how often you want to check the weapon name
             }
 
             screenCaptureOCR.Dispose();
@@ -654,14 +685,14 @@ namespace Recoil
         /// <summary>
         /// Handles the state while the player is buying (key press "B") and exits on ESC.
         /// </summary>
-        private static async Task HandleBuyState( int escapeKey )
+        private static void HandleBuyState( int escapeKey )
         {
             while ( true )
             {
-                Utils.Watch.MicroSleep( 100 );
-                if ( MouseInput.IsKeyPressed( ref escapeKey ) )
+                Utils.Watch.SecondsSleep( 1 );
+                if ( HidInputs.IsKeyPressed( ref escapeKey ) )
                 {
-                    await Task.Delay( 1300 ); // delay to ensure the buy menu is closed, and gun name is visible
+                    Utils.Watch.SecondsSleep( 1 ); // delay to ensure the buy menu is closed, and gun name is visible
                     break;
                 }
             }
@@ -673,9 +704,27 @@ namespace Recoil
         private static bool HasWindowChanged( ref PInvoke.RECT oldRect, ref PInvoke.RECT newRect )
         {
             return oldRect.top != newRect.top || oldRect.bottom != newRect.bottom ||
-                   oldRect.right != newRect.right || oldRect.left != newRect.left;
+            oldRect.right != newRect.right || oldRect.left != newRect.left;
         }
-    }
+
+
+
+        public void Dispose()
+        {
+            Dispose( true );
+            GC.SuppressFinalize( this );
+        }
+
+        protected virtual void Dispose( bool disposing )
+        {
+            if ( disposing &&
+                !Disposed )
+            {
+                RecoilPatternSource.Cancel();
+                RecoilPatternSource.Dispose();
+                Disposed = true;
+            }
+        }
 
 
 
@@ -691,7 +740,7 @@ namespace Recoil
         private bool capturing;
         private readonly PInvoke.RECT gameRect; // Capture the game window size
         private Color crosshairColor; // The manually entered hex code for the crosshair color
-        private int shootKey = MouseInput.VK_LBUTTON; // Private internal variable for shoot key
+        private int shootKey = HidInputs.VK_LBUTTON; // Private internal variable for shoot key
         private readonly CancellationTokenSource cancellationTokenSource;
         private CancellationToken cancellationToken;
         private readonly object recoilDataLock = new(); // Create a lock object
@@ -770,11 +819,11 @@ namespace Recoil
         {
             while ( !cancellationToken.IsCancellationRequested )
             {
-                if ( MouseInput.IsKeyHeld( ref shootKey ) && !capturing )
+                if ( HidInputs.IsKeyHeld( ref shootKey ) && !capturing )
                 {
                     // Start capturing when the shoot key is held
                     StartCapture();
-                } else if ( !MouseInput.IsKeyHeld( ref shootKey ) && capturing )
+                } else if ( !HidInputs.IsKeyHeld( ref shootKey ) && capturing )
                 {
                     // Stop capturing when the shoot key is released
                     StopCapture();
@@ -927,6 +976,7 @@ namespace Recoil
 #endif
 #endif
 
+    }
 }
 
 

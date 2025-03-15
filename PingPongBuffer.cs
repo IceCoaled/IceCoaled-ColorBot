@@ -75,7 +75,7 @@
             {
                 if ( data.Length + writeIndex > capacity )
                 {
-                    ErrorHandler.HandleException( new ArgumentException( "Data size exceeds buffer capacity." ) );
+                    throw new ArgumentException( "Data size exceeds buffer capacity." );
                 }
 
                 // Copy data into the buffer using memory copy to handle unmanaged types.
@@ -98,7 +98,7 @@
             {
                 if ( readIndex == 0 )
                 {
-                    ErrorHandler.HandleExceptionNonExit( new InvalidOperationException( "Buffer is empty" ) );
+                    throw new InvalidOperationException( "Buffer is empty" );
                 }
 
                 // Return the latest entry from the read buffer.
@@ -117,7 +117,7 @@
             {
                 if ( readIndex < 2 )
                 {
-                    ErrorHandler.HandleExceptionNonExit( new InvalidOperationException( "Not enough data in the buffer" ) );
+                    throw new InvalidOperationException( "Not enough data in the buffer" );
                 }
 
                 // Return the two most recent entries

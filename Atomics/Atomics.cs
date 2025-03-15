@@ -1,343 +1,263 @@
-﻿using System.Numerics;
+using System.Numerics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace SCB.Atomics
 {
-
-    using ASC = AtomicSupportClass;
-
-    public unsafe class UnsafeAtomicNumerics<T> : IDisposable
+    /// <summary>
+    /// This is the base class for the atomic operations.
+    /// Provides Atomic operation on variables,
+    /// this includes dynamic contention locking as well.
+    /// It also includes the Extended version,
+    /// which give you full cache line isolation.
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    public unsafe partial class AtomicNumericsBase<T> : IDisposable
     {
+        private void* AllocHeader { get; set; }
 
-        private bool disposed = false;
+        private AtomicStorageEx* storageEx;
+        private AtomicStorage* storage;
+        protected Type TypeInfo { get; init; } = typeof( T );
+        private System.Threading.Lock HighContentionSyncLock { get; init; }
 
-        private volatile uint refCount = 1;
+        protected uint RefCount = 1;
+        protected uint ContentionThreshold { get; init; }
+        private bool Disposed { get; set; } = false;
+        protected bool IsExtended { get; private init; }
 
-        void* allocHeader = null;
 
-        protected ASC.AtomicStorage atomicStorage;
+        protected AtomicStorageEx* StorageEx
+        {
+            get { if ( IsExtended ) { return storageEx; } else return null; }
+            set { if ( IsExtended ) { storageEx = value; } }
+        }
 
-        protected Type VarType { get; set; } = typeof( T );
+        protected AtomicStorage* Storage
+        {
+            get { if ( !IsExtended ) { return storage; } else return null; }
+            set { if ( !IsExtended ) { storage = value; } }
+        }
 
-        protected bool IsUnsigned { get; set; } = ASC.IsUnsigned<T>();
-
-        protected bool IsFloatingPoint { get; set; } = ASC.IsFloatingPoint<T>();
-
-        protected readonly object highContentionSyncLock = new();
 
 
         /// <summary>
-        /// Constructor for the atomic operations.
+        /// Basic constructor.
         /// </summary>
-        /// <exception cref="NotSupportedException"></exception>
-        /// <exception cref="InvalidOperationException"></exception>
-        public UnsafeAtomicNumerics( T inputValue )
+        public AtomicNumericsBase( T inputValue, bool isExtended = false, uint contentionThreshold = uint.MaxValue )
         {
-            // Check if the type is supported
-            if ( !ASC.IsSupported<T>() )
+            // Check if the type is supported, if not throw an exception
+            if ( !IsSupported() )
             {
-                throw new NotSupportedException( "Type not supported" );
+                throw new InvalidOperationException( "Type not supported" );
             }
 
-            // Setup the atomic storage
-            AllocAlignedMemory();
+            // Set extended details
+            IsExtended = isExtended;
+            HighContentionSyncLock = new();
+            ContentionThreshold = contentionThreshold;
 
-            // Set atomic value to check if its properly working
-            atomicStorage.lAtomic = -6969;
+            // Setup the atomic storage
+            // Setup the atomic storage
+            if ( IsExtended )
+            {
+                AllocExtendedAlignedMemory();
+
+                // Set the atomic storage to the memory address
+                StorageEx = ( ( AtomicStorageEx* ) AllocHeader );
+
+                // Check if the atomic storage is not null
+                if ( Unsafe.Read<ulong>( &StorageEx->ulAtomic ) != ulong.MaxValue )
+                {
+                    throw new InvalidOperationException( "Atomic storage is null" );
+                }
+
+                // Clear the value of the atomic storage
+                Unsafe.Write( &StorageEx->ulAtomic, 0x00000000 );
+            } else
+            {
+                AllocAlignedMemory();
+
+                // Set the atomic storage to the memory address
+                Storage = ( ( AtomicStorage* ) AllocHeader );
+
+                // Check if the atomic storage is not null
+                if ( Unsafe.Read<ulong>( &Storage->ulAtomic ) != ulong.MaxValue )
+                {
+                    throw new InvalidOperationException( "Atomic storage is null" );
+                }
+
+                // Clear the value of the atomic storage
+                Unsafe.Write( &Storage->ulAtomic, 0x00000000 );
+            }
+        }
+
+        public AtomicNumericsBase( T inputValue, uint contentionThreshold )
+        {
+            // Check if the type is supported, if not throw an exception
+            if ( !IsSupported() )
+            {
+                throw new InvalidOperationException( "Type not supported" );
+            }
+
+            // Initialize the contention threshold, and the lock
+            IsExtended = true;
+            ContentionThreshold = contentionThreshold;
+            HighContentionSyncLock = new System.Threading.Lock();
+
+            // Check if the type is supported, get the IO and U type
+
+            // Setup the atomic storage
+            if ( IsExtended )
+            {
+                AllocExtendedAlignedMemory();
+            } else
+            {
+                AllocAlignedMemory();
+            }
+
+            // Set the atomic storage to the memory address
+            Storage = ( ( AtomicStorage* ) AllocHeader );
 
             // Check if the atomic storage is not null
-            if ( atomicStorage.lAtomic != -6969 )
+            if ( Unsafe.Read<ulong>( &Storage->ulAtomic ) != ulong.MaxValue )
             {
                 throw new InvalidOperationException( "Atomic storage is null" );
             }
 
-            // Set atomic value to all zeros first, then set the input value
-            atomicStorage.ulAtomic ^= atomicStorage.ulAtomic;
+            // Clear the value of the atomic storage
+            Unsafe.Write( &Storage->ulAtomic, ulong.MinValue );
+        }
 
-            atomicStorage.lAtomic = ASC.AtomiCast<long, T>( inputValue );
+        ~AtomicNumericsBase()
+        {
+            Dispose( false );
         }
 
         private void AllocAlignedMemory()
         {
-            allocHeader = NativeMemory.AlignedAlloc( 16, 16 );
+            AllocHeader = NativeMemory.AlignedAlloc( 16, 8 );
 
-            if ( allocHeader == null )
+            if ( AllocHeader is null )
             {
                 throw new InvalidOperationException( "Memory allocation failed" );
             }
 
-            atomicStorage = new ASC.AtomicStorage();
+            // Initialize the atomic storage
+            var tempStorage = new AtomicStorage
+            {
+                // Set ulong to max value, so we can check if the memory is properly allocated
+                ulAtomic = ulong.MaxValue
+            };
 
-            // Pin the atomic storage in memory
-            Unsafe.Copy( allocHeader, ref atomicStorage );
+            // Serialize the atomic storage to the memory address
+            Marshal.StructureToPtr( tempStorage, ( ( nint ) AllocHeader ), false );
         }
 
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        protected T ReadGeneric() => InternalRead<T>( ASC.RetType.GenericRead );
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        protected double ReadDouble() => InternalRead<double>( ASC.RetType.DoubleRead );
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        protected long ReadLong() => InternalRead<long>( ASC.RetType.LongRead );
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        protected ulong ReadUlong() => InternalRead<ulong>( ASC.RetType.ULongRead );
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        protected int ReadInt32() => InternalRead<int>( ASC.RetType.LongRead );
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        protected uint ReadUint32() => InternalRead<uint>( ASC.RetType.ULongRead );
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        protected short ReadInt16() => InternalRead<short>( ASC.RetType.LongRead );
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        protected ushort ReadUint16() => InternalRead<ushort>( ASC.RetType.ULongRead );
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        protected byte ReadByte() => InternalRead<byte>( ASC.RetType.LongRead );
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        protected sbyte ReadSbyte() => InternalRead<sbyte>( ASC.RetType.LongRead );
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        protected float ReadFloat() => InternalRead<float>( ASC.RetType.DoubleRead );
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        protected bool ReadBool() => InternalRead<bool>( ASC.RetType.LongRead );
-
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining | MethodImplOptions.Synchronized )]
-        private C InternalRead<C>( ASC.RetType returnType )
+        private void AllocExtendedAlignedMemory()
         {
-
-            switch ( returnType )
+            AllocHeader = NativeMemory.AlignedAlloc( 64, 8 );
+            if ( AllocHeader is null )
             {
-
-                case ASC.RetType.DoubleRead:
-                case ASC.RetType.GenericRead:
-                case ASC.RetType.LongRead:
-                {
-                    long readValue;
-                    if ( refCount == 1 )
-                    {
-                        readValue = Volatile.Read( ref atomicStorage.lAtomic );
-                    } else if ( refCount >= 5 )
-                    {
-                        int spinCount = 0;
-                        while ( !Monitor.TryEnter( highContentionSyncLock! ) )
-                        {
-                            spinCount++;
-                            Thread.SpinWait( spinCount << 1 );
-                        }
-
-                        lock ( highContentionSyncLock! )
-                        {
-                            readValue = atomicStorage.lAtomic;
-                        }
-                    } else
-                    {
-                        readValue = Interlocked.Read( ref atomicStorage.lAtomic );
-                    }
-
-                    return ASC.AtomiCast<C, long>( readValue );
-                }
-                case ASC.RetType.ULongRead:
-                {
-                    ulong readValue;
-                    if ( refCount == 1 )
-                    {
-                        readValue = Volatile.Read( ref atomicStorage.ulAtomic );
-                    } else if ( refCount >= 5 )
-                    {
-                        int spinCount = 0;
-                        while ( !Monitor.TryEnter( highContentionSyncLock! ) )
-                        {
-                            spinCount++;
-                            Thread.SpinWait( spinCount << 1 );
-                        }
-
-                        lock ( highContentionSyncLock! )
-                        {
-                            readValue = atomicStorage.ulAtomic;
-                        }
-                    } else
-                    {
-                        readValue = Interlocked.Read( ref atomicStorage.ulAtomic );
-                    }
-
-                    return ASC.AtomiCast<C, ulong>( readValue );
-                }
-                default:
-                {
-                    throw new InvalidOperationException( "Invalid return type" );
-                }
+                throw new InvalidOperationException( "Memory allocation failed" );
             }
+            // Initialize the atomic storage
+            var tempStorage = new AtomicStorageEx
+            {
+                // Set ulong to max value, so we can check if the memory is properly allocated
+                ulAtomic = ulong.MaxValue
+            };
+            // Serialize the atomic storage to the memory address
+            Marshal.StructureToPtr( tempStorage, ( ( nint ) AllocHeader ), false );
         }
 
 
-
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining | MethodImplOptions.Synchronized )]
-        private void Write( T value )
-        {
-            long lCastValue = 0;
-            ulong ulCastValue = 0;
-
-            if ( IsUnsigned )
-            {
-                ulCastValue = ASC.AtomiCast<ulong, T>( value );
-            } else if ( IsFloatingPoint )
-            {
-                lCastValue = ASC.AtomiCast<long, T>( value );
-            } else
-            {
-                lCastValue = ASC.AtomiCast<long, T>( value );
-            }
-
-            if ( refCount == 1 )
-            {
-                if ( IsUnsigned )
-                {
-                    Volatile.Write( ref atomicStorage.ulAtomic, ulCastValue );
-                } else
-                {
-                    Volatile.Write( ref atomicStorage.lAtomic, lCastValue );
-                }
-            } else if ( refCount >= 5 )
-            {
-                int spinCount = 0;
-                while ( !Monitor.TryEnter( highContentionSyncLock! ) )
-                {
-                    spinCount++;
-                    Thread.SpinWait( spinCount << 1 );
-                }
-
-                lock ( highContentionSyncLock! )
-                {
-                    if ( IsUnsigned )
-                    {
-                        atomicStorage.ulAtomic = ulCastValue;
-                    } else
-                    {
-                        atomicStorage.lAtomic = lCastValue;
-                    }
-                }
-            } else
-            {
-                if ( IsUnsigned )
-                {
-                    Interlocked.Exchange( ref atomicStorage.ulAtomic, ulCastValue );
-                } else
-                {
-                    Interlocked.Exchange( ref atomicStorage.lAtomic, lCastValue );
-                }
-            }
-        }
-
-
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining | MethodImplOptions.Synchronized )]
-        public T CompareExchange( T value, T comparand )
-        {
-            if ( IsUnsigned )
-            {
-                ulong ulValue = ASC.AtomiCast<ulong, T>( value );
-                ulong ulComparand = ASC.AtomiCast<ulong, T>( comparand );
-
-                return ASC.AtomiCast<T, ulong>( Interlocked.CompareExchange( ref atomicStorage.ulAtomic, ulValue, ulComparand ) );
-            } else
-            {
-                long lValue = ASC.AtomiCast<long, T>( value );
-                long lComparand = ASC.AtomiCast<long, T>( comparand );
-
-                return ASC.AtomiCast<T, long>( Interlocked.CompareExchange( ref atomicStorage.lAtomic, lValue, lComparand ) );
-            }
-        }
-
-
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining | MethodImplOptions.Synchronized )]
-        public T Increment()
-        {
-            if ( IsFloatingPoint )
-            {
-                double castDbl = ReadDouble();
-                var newValue = ASC.AtomiCast<T, double>( castDbl + 1.0 );
-                Write( newValue );
-                return newValue;
-            } else if ( IsUnsigned )
-            {
-                return ASC.AtomiCast<T, ulong>( Interlocked.Increment( ref atomicStorage.ulAtomic ) );
-            } else
-            {
-                return ASC.AtomiCast<T, long>( Interlocked.Increment( ref atomicStorage.lAtomic ) );
-            }
-        }
-
-
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining | MethodImplOptions.Synchronized )]
-        public T Decrement()
-        {
-            if ( IsFloatingPoint )
-            {
-                double castDbl = ReadDouble();
-                var newValue = ASC.AtomiCast<T, double>( castDbl - 1.0 );
-                Write( newValue );
-                return newValue;
-            } else if ( IsUnsigned )
-            {
-                return ASC.AtomiCast<T, ulong>( Interlocked.Decrement( ref atomicStorage.ulAtomic ) );
-            } else
-            {
-                return ASC.AtomiCast<T, long>( Interlocked.Decrement( ref atomicStorage.lAtomic ) );
-            }
-        }
-
-
+        /// <summary>
+        /// Lock the atomic operations.
+        /// If you Achive the lock, you must release it,
+        /// by calling the <see cref="Unlock"/>.
+        /// If you want a timeout, you can specify it in milliseconds.
+        /// </summary>
+        /// <param name="timeoutMs"></param>
+        /// <returns>Returns true if lock achieved, else false</returns>
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public T VALUE() => ReadGeneric();
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public void VALUE( T value ) => Write( value );
-
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public bool TryLock()
+        public bool TryLock( int timeoutMs = 0 )
         {
-            return Monitor.TryEnter( highContentionSyncLock! );
+            return ( timeoutMs == 0 ) ? HighContentionSyncLock!.TryEnter() : HighContentionSyncLock!.TryEnter( timeoutMs );
         }
 
-
+        /// <summary>
+        /// Exits the lock previously acquired by <see cref="TryLock"/>
+        /// </summary>
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public void Unlock()
         {
-            Monitor.Exit( highContentionSyncLock! );
+            HighContentionSyncLock!.Exit();
         }
 
+        /// <summary>
+        /// Enter a scope lock for the atomic operations.
+        /// This will wait until the lock is available.
+        /// Dispose the scope lock to release the lock.
+        /// </summary>
+        /// <returns><see cref="System.Threading.Lock.Scope"/></returns>
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public System.Threading.Lock.Scope ScopeLock()
+        {
+            return HighContentionSyncLock.EnterScope();
+        }
+
+
+        /// <summary>
+        /// Increment the reference count.
+        /// </summary>
+        /// <exception cref="InvalidOperationException"></exception>
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public void AddReference()
         {
-            if ( refCount == uint.MaxValue )
+            if ( RefCount == uint.MaxValue )
             {
                 throw new InvalidOperationException( "Reference count overflow" );
             }
 
-            Interlocked.Increment( ref refCount );
+            Interlocked.Increment( ref RefCount );
         }
 
+
+        /// <summary>
+        /// Decrement the reference count.
+        /// If the reference count is 0, the object is disposed.
+        /// </summary>
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
         public void RemoveReference()
         {
-            if ( Interlocked.Decrement( ref refCount ) == 0 )
+            if ( Interlocked.Decrement( ref RefCount ) == 0 )
             {
                 Dispose();
             }
+        }
+
+
+        /// <summary>
+        /// Check if the type is supported.
+        /// </summary>
+        /// <returns>False if not supported, else true</returns>
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        private static bool IsSupported()
+        {
+            var type = typeof( T );
+            return type == typeof( bool ) ||
+                   type == typeof( byte ) ||
+                   type == typeof( sbyte ) ||
+                   type == typeof( short ) ||
+                   type == typeof( ushort ) ||
+                   type == typeof( int ) ||
+                   type == typeof( uint ) ||
+                   type == typeof( long ) ||
+                   type == typeof( ulong ) ||
+                   type == typeof( float ) ||
+                   type == typeof( double );
         }
 
 
@@ -349,223 +269,252 @@ namespace SCB.Atomics
 
         protected virtual void Dispose( bool disposing )
         {
-            if ( !disposed &&
-                disposing )
+            if ( !Disposed &&
+                disposing &&
+                AllocHeader != null )
             {
-                // Deallocate the memory
-                NativeMemory.AlignedFree( allocHeader );
+                // Free the memory, set the pointers to null
+                NativeMemory.AlignedFree( AllocHeader );
+                AllocHeader = null;
+                Storage = null;
+                StorageEx = null;
             }
-
-            disposed = true;
-        }
-
-        // Object overrides
-        public override string ToString()
-        {
-            return ReadGeneric()!.ToString()!;
-        }
-
-        public override bool Equals( object? obj )
-        {
-            if ( obj is UnsafeAtomicNumerics<T> other )
-            {
-
-                return refCount == other.refCount &&
-                       ToString() == other.ToString() &&
-                       VarType == other.VarType &&
-                       IsUnsigned == other.IsUnsigned &&
-                       IsFloatingPoint == other.IsFloatingPoint;
-            }
-            return false;
-        }
-
-        public override int GetHashCode()
-        {
-            return HashCode.Combine( refCount, ToString(), VarType, IsUnsigned, IsFloatingPoint );
+            Disposed = true;
         }
     }
 
 
     /// <summary>
-    /// This has a lot of left over stuff from me making a safe atomic class.
-    /// i decided to remove it because i ended up making a base class and derived classes.
-    /// Thats just to much work to set up for both safe and unsafe atomic classes.
+    /// This is the base set of functions any derived class must implement.
     /// </summary>
+    /// <typeparam name="T"></typeparam>
+    public interface IAtomicBaseOperations<T> where T : struct
+    {
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public abstract T Supplant( [Optional] in T value, [Optional] in int rsValue, AtomicSupportClass.AtomicOperation aO );
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public abstract T Read();
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public abstract void Write( in T value );
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining | MethodImplOptions.Synchronized )]
+        public abstract T CompareExchange( in T value, in T comparand );
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining | MethodImplOptions.Synchronized )]
+        public abstract T Increment( in T value );
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining | MethodImplOptions.Synchronized )]
+        public abstract T Decrement( in T value );
+    }
+
+
+    /// <summary>
+    /// Class used to get a disposable reference to the atomic class.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// !! <see cref="A"/> !! Is the derived atomic class.
+    /// !! <see cref="U"/> !! Is the supported type the derived class uses.
+    /// </para>
+    /// <para>
+    /// This DOES NOT make a copy of the atomic class, it just gives you a reference to it.
+    /// </para>
+    /// <para>
+    /// By making this class disposable, you can use it in a scoped manner,
+    /// or you can keep the reference for as long as needed.
+    /// </para>
+    /// <para>
+    /// Just make sure to dispose when you are done with it.
+    /// </para>
+    /// <para>
+    /// Use <c>using</c> keyword for total scoped control.
+    /// Or you can get the reference and dispose it manually when needed.
+    /// </para>
+    /// <para>
+    /// Supported Types:
+    /// <c>bool, byte, sbyte, short, ushort, int, 
+    /// uint, long, ulong, float, double</c>.
+    /// </para>
+    /// </remarks>
+    /// <param name="derivedAtomicsClass"></param>
+    /// <typeparam name="A"></typeparam>
+    /// <typeparam name="U"></typeparam>
+    /// <exception cref="InvalidOperationException"></exception>
+    public class ScopedAtomicRef<A, U> : IDisposable
+    {
+        public A Atomic { get; init; }
+        private bool Disposed { get; set; } = false;
+
+        MethodInfo AddReferenceMethod { get; init; }
+        MethodInfo RemoveReferenceMethod { get; init; }
+
+        public ScopedAtomicRef( A derivedAtomicsClass )
+        {
+
+            Atomic = derivedAtomicsClass;
+
+            // Check if the derived class is a subclass of AtomicNumericsBase
+            if ( !typeof( A ).IsSubclassOf( typeof( AtomicNumericsBase<U> ) ) )
+            {
+                throw new InvalidOperationException( "Derived class must be a subclass of AtomicNumericsBase" );
+            }
+
+            // Get add / remove reference methods, from field info
+            AddReferenceMethod = typeof( A ).GetMethod( "AddReference" ) ?? throw new InvalidOperationException( "Add reference method not found" );
+            RemoveReferenceMethod = typeof( A ).GetMethod( "RemoveReference" ) ?? throw new InvalidOperationException( "Remove reference method not found" );
+
+            // Invoke the add Reference method
+            AddReferenceMethod.Invoke( Atomic, null );
+        }
+
+        ~ScopedAtomicRef()
+        {
+            Dispose( false );
+        }
+
+        public void Dispose()
+        {
+            Dispose( true );
+            GC.SuppressFinalize( this );
+        }
+
+        protected virtual void Dispose( bool disposing )
+        {
+            if ( !Disposed &&
+                disposing )
+            {
+                //Invoke the remove reference method
+                RemoveReferenceMethod.Invoke( Atomic, null );
+            }
+            Disposed = true;
+        }
+    }
+
+
+    /// <summary>
+    /// Atomic storage structure for the atomic operations.
+    /// This is purposely made to be 16 bytes in size, With a pack of 8 bytes.
+    /// This is to ensure 1 we truly have atomic operations on the variable.
+    /// 2, to ensure that the variable is properly aligned in memory.
+    /// </summary>
+    [StructLayout( LayoutKind.Explicit, Pack = 8, Size = 16 )]
+    public struct AtomicStorage
+    {
+        [FieldOffset( 0 )]
+        public long lAtomic;
+        [FieldOffset( 0 )]
+        public ulong ulAtomic;
+        [FieldOffset( 8 )]
+        private readonly ulong padding0;
+    }
+
+    /// <summary>
+    /// This is an extended version of the atomic storage structure.
+    /// It adds the advantage to make the atomic value occupy its own cache line.
+    /// </summary>
+    [StructLayout( LayoutKind.Explicit, Pack = 8, Size = 64 )]
+    public struct AtomicStorageEx
+    {
+        [FieldOffset( 0 )] private readonly ulong padding0;
+        [FieldOffset( 8 )] private readonly ulong padding1;
+        [FieldOffset( 16 )] private readonly ulong padding2;
+
+        [FieldOffset( 24 )]
+        public ulong ulAtomic;
+        [FieldOffset( 24 )]
+        public long lAtomic;
+
+        [FieldOffset( 32 )] private readonly ulong padding3;
+        [FieldOffset( 40 )] private readonly ulong padding4;
+        [FieldOffset( 48 )] private readonly ulong padding5;
+        [FieldOffset( 56 )] private readonly ulong padding6;
+    }
+
+
+
     public static class AtomicSupportClass
     {
-        private readonly struct FD
+        private sealed record FD
         {
             public static readonly int SIGN_MASK = 0x1;
             public static readonly int EXPONENT_MASK = 0xFF;
             public static readonly int MANTISSA_MASK = 0x7FFFFF;
-            public static readonly int EXPONENT_BIAS = 127;
-            public static readonly int SIGN_SHIFT = 31;
-            public static readonly int EXPONENT_SHIFT = 23;
-            public static readonly int MAX_INT32 = 0x7FFFFFFF;
-            public static readonly uint MAX_UINT32 = 0xFFFFFFFF;
+            public static readonly int EXPONENT_BIAS = 0x7F;
+            public static readonly int SIGN_SHIFT = 0x1F;
+            public static readonly int EXPONENT_SHIFT = 0x17;
         }
 
-        readonly struct DD
+        private sealed record DD
         {
-            public static readonly long SIGN_MASK = 0x1;
-            public static readonly long EXPONENT_MASK = 0x7FF;
+            public static readonly int SIGN_MASK = 0x1;
+            public static readonly int EXPONENT_MASK = 0x7FF;
             public static readonly long MANTISSA_MASK = 0x000FFFFFFFFFFFFF;
-            public static readonly int EXPONENT_BIAS = 1023;
-            public static readonly int SIGN_SHIFT = 63;
-            public static readonly int EXPONENT_SHIFT = 52;
+            public static readonly int EXPONENT_BIAS = 0x3FF;
+            public static readonly int SIGN_SHIFT = 0x3F;
+            public static readonly int EXPONENT_SHIFT = 0x34;
         }
-
-
-
-        // C# Methods to convert using BitConverter
-        public static float Int32ToFloat( ref int value ) => BitConverter.Int32BitsToSingle( value );
-        public static float Uint32ToFloat( ref uint value ) => BitConverter.UInt32BitsToSingle( value );
-
-        public static double Int64ToDouble( ref long value ) => BitConverter.Int64BitsToDouble( value );
-
-        public static double Uint64ToDouble( ref ulong value ) => BitConverter.UInt64BitsToDouble( value );
-
-        // Methods to Get the bits of a float or double
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining | MethodImplOptions.Synchronized )]
-        public static int FloatToInt32Bits( ref float value )
-        {
-            return BitConverter.SingleToInt32Bits( value );
-        }
-
-        [MethodImpl( MethodImplOptions.AggressiveInlining | MethodImplOptions.Synchronized )]
-        public static long DoubleToInt64Bits( ref double value )
-        {
-            return BitConverter.DoubleToInt64Bits( value );
-        }
-
-        // Custom methods to convert 32 and 64 bit variables to float and double
-
-        public static float Sixty4BitsToFloat( ref long value )
-        {
-            return Thirty2BitsToFloatInternal( ( int ) ( value & FD.MAX_INT32 ) );
-        }
-
-        public static float Sixty4BitsToFloat( ref ulong value )
-        {
-            return Thirty2BitsToFloatInternal( ( int ) ( value & FD.MAX_UINT32 ) );
-        }
-
-        public static double Sixty4BitsToDouble( ref long value )
-        {
-            return Sixty4BitsToDoubleInternal( value );
-        }
-
-        public static double Sixty4BitsToDouble( ref ulong value )
-        {
-            return Sixty4BitsToDoubleInternal( ( long ) value );
-        }
-
-        public static float Thirty2BitsToFloat( ref int value )
-        {
-            return Thirty2BitsToFloatInternal( value );
-        }
-
-        public static float Thirty2BitsToFloat( ref uint value )
-        {
-            return Thirty2BitsToFloatInternal( ( int ) value );
-        }
-
-        public static int FloatToInt32( ref float value )
-        {
-            return FloatToInt32Internal( value );
-        }
-
-        public static long DoubleToInt64( ref double value )
-        {
-            return DoubleToInt64Internal( value );
-        }
-
-        public static long FloatToInt64( ref float value )
-        {
-            return DoubleToInt64Internal( value );
-        }
-
-        public static int DoubleToInt32( ref double value )
-        {
-            return FloatToInt32Internal( ( float ) value );
-        }
-
-        public static ulong FloatToUint64( ref float value )
-        {
-            return ( ulong ) DoubleToInt64Internal( value );
-        }
-
-        public static uint FloatToUint32( ref float value )
-        {
-            return ( uint ) FloatToInt32Internal( value );
-        }
-
-        public static ulong DoubleToUint64( ref double value )
-        {
-            return ( ulong ) DoubleToInt64Internal( value );
-        }
-
-
-
-
-
 
         /// <summary>
-        ///  Thread safe method to convert 64 bit variable to double
+        /// Converts a int that represents a float back to float.
         /// </summary>
         /// <param name="value"> long variable from reading memory address.</param>
-        /// <returns>Original double value from memory address.</returns>
+        /// <returns>Returns original value that was reinterpreted</returns>
         /// <exception cref="InvalidOperationException"></exception>
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private static float Thirty2BitsToFloatInternal( int value )
+        public static float LongToFloat( long value )
         {
-            int mantissa = value & FD.MANTISSA_MASK;
-            int exponent = value >> FD.EXPONENT_SHIFT & FD.EXPONENT_MASK;
-            int sign = ( value >> FD.SIGN_SHIFT & FD.SIGN_MASK ) == 1 ? -1 : 1;
+            // Get the sign, exponent and mantissa bits of the float
+            long mantissa = value & FD.MANTISSA_MASK;
+            long exponent = value >> FD.EXPONENT_SHIFT & FD.EXPONENT_MASK;
+            long sign = ( value >> FD.SIGN_SHIFT & FD.SIGN_MASK ) == 1L ? -1L : 1L;
 
-            if ( mantissa < 0 || mantissa > FD.MANTISSA_MASK )
+            // Check if the mantissa, exponent and sign values are valid
+            if ( mantissa < 0L || mantissa > FD.MANTISSA_MASK )
             {
                 throw new InvalidOperationException( "FloatLayoutData: Invalid mantissa value" );
             }
 
-            if ( exponent < 0 || exponent > FD.EXPONENT_MASK )
+            if ( exponent < 0L || exponent > FD.EXPONENT_MASK )
             {
                 throw new InvalidOperationException( "FloatLayoutData: Invalid exponent value" );
             }
 
-            if ( sign != 1 && sign != -1 )
+            if ( sign != 1L && sign != -1L )
             {
                 throw new InvalidOperationException( "FloatLayoutData: Invalid sign value" );
             }
 
+            // Remove the bias from the exponent
             exponent -= FD.EXPONENT_BIAS;
 
+            // Calculate the float value from the sign, exponent and mantissa bits
             if ( exponent == -FD.EXPONENT_BIAS )
             {
                 if ( mantissa == 0 )
                 {
-                    return sign == 1 ? 0.0f : -0.0f;
+                    return sign == 1L ? 0.0f : -0.0f;
                 } else
                 {
-                    return sign * ( mantissa / ( float ) ( 1 << FD.EXPONENT_SHIFT ) ) * ( float ) Math.Pow( 2, -( FD.EXPONENT_BIAS - 1 ) );
+                    return sign * ( mantissa / ( float ) ( 1L << FD.EXPONENT_SHIFT ) ) * ( float ) Math.Pow( 2L, -( FD.EXPONENT_BIAS - 1L ) );
                 }
             } else
             {
-                return sign * ( 1 + mantissa / ( float ) ( 1 << FD.EXPONENT_SHIFT ) ) * ( float ) Math.Pow( 2, exponent );
+                return sign * ( 1L + mantissa / ( float ) ( 1 << FD.EXPONENT_SHIFT ) ) * ( float ) Math.Pow( 2L, exponent );
             }
         }
 
 
         /// <summary>
-        ///  Thread safe method to convert 64 bit variable to double
+        /// Converts a long that represents a double back to double.
         /// </summary>
         /// <param name="value"> long variable from reading memory address.</param>
-        /// <returns>Original double value from memory address.</returns>
+        /// <returns>Returns original value that was reinterpreted</returns>
         /// <exception cref="InvalidOperationException"></exception>
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private static double Sixty4BitsToDoubleInternal( long value )
+        public static double LongToDouble( long value )
         {
             long mantissa = value & DD.MANTISSA_MASK;
             long exponent = value >> DD.EXPONENT_SHIFT & DD.EXPONENT_MASK;
@@ -604,446 +553,418 @@ namespace SCB.Atomics
         }
 
         /// <summary>
-        /// Thread safe method to get the bits of a float variable
+        /// Reinterpret the float value as an int value.
+        /// This preserves the bit structure of the float value.
         /// </summary>
-        /// <param name="value">Original float value.</param>
-        /// <returns>Returns the bit structure of the float</returns>
+        /// <param name="value"></param>
+        /// <returns>Returns int that represents input</returns>
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private static int FloatToInt32Internal( float value )
+        public static long FloatToLong( float value )
         {
             // Get the sign of the float
-            int sign = value < 0 ? 1 : 0;
+            long sign = value < 0L ? 1L : 0L;
             value = Math.Abs( value );
 
-            int exponent = 0;
-            int mantissa = 0;
+            long exponent;
+            long mantissa;
 
             // If the absolute value is 0, then the exponent and mantissa are 0
-            if ( value == 0 )
+            if ( value < 0.00001 )
             {
-                exponent = mantissa = 0;
+                exponent = mantissa = 0L;
             } else
             {
                 // Get the exponent and mantissa bits of the float
-                exponent = ( int ) Math.Floor( Math.Log( value, 2 ) ) + FD.EXPONENT_BIAS;
-                mantissa = ( int ) ( ( value / Math.Pow( 2, exponent - FD.EXPONENT_BIAS ) - 1 ) * ( 1 << FD.EXPONENT_SHIFT ) );
+                exponent = ( long ) Math.Floor( Math.Log( value, 2L ) ) + FD.EXPONENT_BIAS;
+                mantissa = ( long ) ( ( value / Math.Pow( 2L, exponent - FD.EXPONENT_BIAS ) - 1L ) * ( 1L << FD.EXPONENT_SHIFT ) );
             }
 
             // Combine the sign, exponent and mantissa bits to get the original float value
-            int result = sign << FD.SIGN_SHIFT | exponent << FD.EXPONENT_SHIFT | mantissa;
-            return result;
+            return sign << FD.SIGN_SHIFT | exponent << FD.EXPONENT_SHIFT | mantissa;
         }
 
 
 
         /// <summary>
-        /// Thread safe method to get the bits of a double variable
+        /// Reinterpret the double value as a long value.
+        /// This preserves the bit structure of the double value.
         /// </summary>
-        /// <param name="value">Original double value</param>
-        /// <returns>Returns the bit structure of the double</returns>
+        /// <param name="value"></param>
+        /// <returns>Returns long that represents input</returns>
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        private static long DoubleToInt64Internal( double value )
+        public static long DoubleToLong( double value )
         {
-            // Get the sign of the double
             long sign = value < 0L ? 1L : 0L;
-
-            // Get the absolute value of the double
             value = Math.Abs( value );
+            long exponent;
+            long mantissa;
 
-            long exponent = 0;
-            long mantissa = 0;
-
-
-            // If the absolute value is 0, then the exponent and mantissa are 0
-            if ( value == 0 )
+            if ( value < 0.00001 )
             {
                 exponent = mantissa = 0;
             } else
             {
-                // Get the exponent and mantissa bits of the double
-                exponent = ( long ) Math.Floor( Math.Log( value, 2L ) ) + DD.EXPONENT_BIAS;
-                mantissa = ( long ) ( ( value / Math.Pow( 2L, exponent - DD.EXPONENT_BIAS ) - 1L ) * ( 1L << DD.EXPONENT_SHIFT ) );
+                exponent = ( ( long ) Math.Floor( Math.Log( value, 2L ) ) + DD.EXPONENT_BIAS );
+                mantissa = ( ( long ) ( ( value / Math.Pow( 2L, exponent - DD.EXPONENT_BIAS ) - 1L ) * ( 1L << DD.EXPONENT_SHIFT ) ) );
             }
-
-            // Combine the sign, exponent and mantissa bits to get the original double value
-            long result = sign << DD.SIGN_SHIFT | exponent << DD.EXPONENT_SHIFT | mantissa;
-            return result;
-        }
-
-        public static long BitCastUlongToLong( ulong value )
-        {
-            long result = 0;
-
-            ParallelOptions parallelOptions = new()
-            {
-                MaxDegreeOfParallelism = Environment.ProcessorCount
-            };
-
-            Parallel.For( 0, 64, parallelOptions, i =>
-            {
-                result |= ( ( long ) value >> i & 1 ) << i;
-            } );
-
-            return result;
-        }
-
-        public static ulong BitCastLongToUlong( long value )
-        {
-            ulong result = 0;
-
-            ParallelOptions parallelOptions = new()
-            {
-                MaxDegreeOfParallelism = Environment.ProcessorCount
-            };
-
-            Parallel.For( 0, 64, parallelOptions, i =>
-            {
-                result |= ( ( ulong ) value >> i & 1 ) << i;
-            } );
-
-            return result;
+            return sign << DD.SIGN_SHIFT | exponent << DD.EXPONENT_SHIFT | mantissa;
         }
 
 
-        [StructLayout( LayoutKind.Explicit, Size = 16 )]
-        public struct AtomicStorage
-        {
-            [FieldOffset( 0 )]
-            public long lAtomic;
-
-            [FieldOffset( 0 )]
-            public ulong ulAtomic;
-        }
-
-
-        /// <summary>
-        /// Check if the type is supported.
-        /// </summary>
-        [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool IsSupported<G>()
-        {
-            return typeof( G ) == typeof( bool )
-            || typeof( G ) == typeof( byte )
-            || typeof( G ) == typeof( short )
-            || typeof( G ) == typeof( int )
-            || typeof( G ) == typeof( long )
-            || typeof( G ) == typeof( sbyte )
-            || typeof( G ) == typeof( ushort )
-            || typeof( G ) == typeof( uint )
-            || typeof( G ) == typeof( float )
-            || typeof( G ) == typeof( double )
-            || typeof( G ) == typeof( ulong );
-        }
+        /*  Set of pure functions to convert from different integer types to long/ulong,
+        *  and from long/ulong to different integer types.
+        * I have these because we cant use <see cref="Unsafe.As"/>
+        * to convert from smaller types to larger types.
+        * This is because <see cref="Unsafe.As"/> is a bit reinterpretation,
+        * So it will read 64 bits of memory, and if the memory is not 64 bits,
+        * we will get an exception.
+        * 
+        * When converting from larger types to smaller types, we dont need to 
+        * worry about the sign but since when explicit casting from smaller
+        * to larger it uses sign extension. So every bit past the smaller type
+        * bit count will be the sign bit.
+        */
 
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool IsFloatingPoint<G>()
+        public static long SbyteToLong( sbyte value )
         {
-            return typeof( G ) == typeof( float )
-                || typeof( G ) == typeof( double );
+            return ( long ) value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool IsUnsigned<G>()
+        public static long ByteToLong( byte value )
         {
-            return typeof( G ) == typeof( byte )
-                || typeof( G ) == typeof( ushort )
-                || typeof( G ) == typeof( uint )
-                || typeof( G ) == typeof( ulong );
-        }
-
-
-
-        /// <summary>
-        /// Safe cast using boxing and unboxing.
-        /// </summary>
-        public static T AtomiCast<T>( object? value )
-        {
-            if ( value is T t )
-            {
-                return t;
-            } else
-            {
-                return default!;
-            }
-        }
-
-        public unsafe static T AtomiCast<T, R>( R value )
-        {
-            return Unsafe.As<R, T>( ref value );
-        }
-
-        public unsafe static ref T RefAtomiCast<T, R>( R value )
-        {
-            return ref Unsafe.AsRef<T>( &value );
+            return ( long ) value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool ArithmeticOperation( AtomicOps operation )
+        public static long ShortToLong( short value )
         {
-            return operation switch
-            {
-                AtomicOps.Add => true,
-                AtomicOps.Subtract => true,
-                AtomicOps.Multiply => true,
-                AtomicOps.Divide => true,
-                AtomicOps.Modulus => true,
-                _ => false,
-            };
+            return ( long ) value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool BitwiseOperation( AtomicOps operation )
+        public static long UshortToLong( ushort value )
         {
-            return operation switch
-            {
-                AtomicOps.And => true,
-                AtomicOps.Or => true,
-                AtomicOps.Xor => true,
-                AtomicOps.Not => true,
-                _ => false,
-            };
+            return value;
         }
 
         [MethodImpl( MethodImplOptions.AggressiveInlining )]
-        public static bool ShiftOperation( AtomicOps operation )
+        public static long IntToLong( int value )
         {
-            return operation switch
-            {
-                AtomicOps.LeftShift => true,
-                AtomicOps.RightShift => true,
-                AtomicOps.RotateLeft => true,
-                AtomicOps.RotateRight => true,
-                _ => false,
-            };
+            return ( long ) value;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static long UintToLong( uint value )
+        {
+            return value;
+        }
+
+        //-------types-to-ulong----------//
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ulong SbyteToUlong( sbyte value )
+        {
+            return ( ulong ) value;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ulong ByteToUlong( byte value )
+        {
+            return ( ulong ) value;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ulong ShortToUlong( short value )
+        {
+            return ( ulong ) value;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ulong UshortToUlong( ushort value )
+        {
+            return value;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ulong IntToUlong( int value )
+        {
+            return ( ulong ) value;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ulong UintToUlong( uint value )
+        {
+            return value;
+        }
+
+        //-------long-to-types----------//
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static byte LongToByte( long value )
+        {
+            return ( ( byte ) ( value & byte.MaxValue ) );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static sbyte LongToSbyte( long value )
+        {
+            return ( ( sbyte ) ( value & byte.MaxValue ) );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ushort LongToUshort( long value )
+        {
+            return ( ( ushort ) ( value & ushort.MaxValue ) );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static short LongToShort( long value )
+        {
+            return ( ( short ) ( value & ushort.MaxValue ) );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static uint LongToUint( long value )
+        {
+            return ( ( uint ) ( value & uint.MaxValue ) );
         }
 
 
-        public enum AtomicOps
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static int LongToInt( long value )
         {
-            Add,
-            Subtract,
-            Multiply,
-            Divide,
-            Modulus,
-            And,
-            Or,
-            Xor,
-            Not,
-            LeftShift,
-            RightShift,
-            RotateLeft,
-            RotateRight,
+            return ( ( int ) ( value & uint.MaxValue ) );
         }
 
-        public enum RetType
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ulong LongToUlong( long value )
         {
-            LongRead,
-            ULongRead,
-            DoubleRead,
-            GenericRead,
-
+            return ( ( ulong ) ( value ) );
         }
 
-        public static Dictionary<AtomicOps, Func<bool, bool, bool>> BoolOperations()
+        //-------ulong-to-types----------//
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static byte UlongToByte( ulong value )
         {
-            return new Dictionary<AtomicOps, Func<bool, bool, bool>>()
-            {
-                { AtomicOps.And, (atomicValue, inputValue) => atomicValue && inputValue },
-                { AtomicOps.Or, (atomicValue, inputValue) => atomicValue || inputValue },
-                { AtomicOps.Xor, (atomicValue, inputValue) => atomicValue ^ inputValue },
-                { AtomicOps.Not, (atomicValue, _) => !atomicValue }
-            };
+            return ( ( byte ) ( value & byte.MaxValue ) );
         }
 
-        public static Dictionary<AtomicOps, Func<G, G, G>> ArithmeticOperations<G>() where G : INumber<G>
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static sbyte UlongToSbyte( ulong value )
         {
-            return new Dictionary<AtomicOps, Func<G, G, G>>()
-            {
-                { AtomicOps.Add, (atomicValue, inputValue) => inputValue + atomicValue },
-                { AtomicOps.Subtract, (atomicValue, inputValue) => inputValue - atomicValue },
-                { AtomicOps.Multiply, (atomicValue, inputValue) => inputValue * atomicValue },
-                { AtomicOps.Divide, (atomicValue, inputValue) => inputValue / atomicValue },
-                { AtomicOps.Modulus, (atomicValue, inputValue) => inputValue % atomicValue }
-            };
+            return ( ( sbyte ) ( value & byte.MaxValue ) );
         }
 
-        public static Dictionary<AtomicOps, Func<long, long, long>> Signed64BitwiseOperations()
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ushort UlongToUshort( ulong value )
         {
-            return new Dictionary<AtomicOps, Func<long, long, long>>()
-            {
-                { AtomicOps.And, (atomicValue, inputValue) => atomicValue & inputValue },
-                { AtomicOps.Or, (atomicValue, inputValue) => atomicValue | inputValue },
-                { AtomicOps.Xor, (atomicValue, inputValue) =>  atomicValue ^ inputValue },
-                { AtomicOps.Not, (atomicValue, _) => ~atomicValue }
-            };
+            return ( ( ushort ) ( value & ushort.MaxValue ) );
         }
 
-        public static Dictionary<AtomicOps, Func<ulong, ulong, ulong>> Unsigned64BitwiseOperations()
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static short UlongToShort( ulong value )
         {
-            return new Dictionary<AtomicOps, Func<ulong, ulong, ulong>>()
-            {
-                { AtomicOps.And, (atomicValue, inputValue) => atomicValue & inputValue },
-                { AtomicOps.Or, (atomicValue, inputValue) => atomicValue | inputValue },
-                { AtomicOps.Xor, (atomicValue, inputValue) =>  atomicValue ^ inputValue },
-                { AtomicOps.Not, (atomicValue, _) => ~atomicValue }
-            };
+            return ( ( short ) ( value & ushort.MaxValue ) );
         }
 
-        public static Dictionary<AtomicOps, Func<long, int, long>> Signed64ShiftOperations()
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static uint UlongToUint( ulong value )
         {
-            return new Dictionary<AtomicOps, Func<long, int, long>>()
-            {
-                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( atomicValue & 0x7FFFFFFFFFFFFFFF ) << inputValue },
-                { AtomicOps.RightShift, (atomicValue, inputValue) => ( atomicValue & 0x7FFFFFFFFFFFFFFF ) >> inputValue },
-                { AtomicOps.RotateLeft, (atomicValue, inputValue) =>  ( atomicValue & 0x7FFFFFFFFFFFFFFF  ) << inputValue  |  ( atomicValue & 0x7FFFFFFFFFFFFFFF  ) >>  64 - inputValue   },
-                { AtomicOps.RotateRight, (atomicValue, inputValue) =>  ( atomicValue & 0x7FFFFFFFFFFFFFFF ) >> inputValue  |  ( atomicValue & 0x7FFFFFFFFFFFFFFF ) <<  64 - inputValue   }
-            };
-        }
-
-        public static Dictionary<AtomicOps, Func<ulong, int, ulong>> Unsigned64ShiftOperations()
-        {
-            return new Dictionary<AtomicOps, Func<ulong, int, ulong>>()
-            {
-                { AtomicOps.LeftShift, (atomicValue, inputValue) => atomicValue << inputValue },
-                { AtomicOps.RightShift, (atomicValue, inputValue) => atomicValue >> inputValue },
-                { AtomicOps.RotateLeft, (atomicValue, inputValue) =>  atomicValue << inputValue  |  atomicValue >>  64 - inputValue },
-                { AtomicOps.RotateRight, (atomicValue, inputValue) =>  atomicValue >> inputValue  |  atomicValue <<  64 - inputValue }
-            };
-        }
-
-        public static Dictionary<AtomicOps, Func<int, int, int>> Signed32BitwiseOperations()
-        {
-            return new Dictionary<AtomicOps, Func<int, int, int>>()
-            {
-                { AtomicOps.And, (atomicValue, inputValue) => atomicValue & inputValue },
-                { AtomicOps.Or, (atomicValue, inputValue) => atomicValue | inputValue },
-                { AtomicOps.Xor, (atomicValue, inputValue) =>  atomicValue ^ inputValue },
-                { AtomicOps.Not, (atomicValue, _) => ~atomicValue }
-            };
-        }
-
-        public static Dictionary<AtomicOps, Func<uint, uint, uint>> Unsigned32BitwiseOperations()
-        {
-            return new Dictionary<AtomicOps, Func<uint, uint, uint>>()
-            {
-                { AtomicOps.And, (atomicValue, inputValue) => atomicValue & inputValue },
-                { AtomicOps.Or, (atomicValue, inputValue) => atomicValue | inputValue },
-                { AtomicOps.Xor, (atomicValue, inputValue) =>  atomicValue ^ inputValue },
-                { AtomicOps.Not, (atomicValue, _) => ~atomicValue }
-            };
-        }
-
-        public static Dictionary<AtomicOps, Func<int, int, int>> Signed32ShiftOperations()
-        {
-            return new Dictionary<AtomicOps, Func<int, int, int>>()
-            {
-                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( atomicValue & 0x7FFFFFFF ) << inputValue },
-                { AtomicOps.RightShift, (atomicValue, inputValue) => ( atomicValue & 0x7FFFFFFF ) >> inputValue },
-                { AtomicOps.RotateLeft, (atomicValue, inputValue) =>  ( atomicValue & 0x7FFFFFFF ) << inputValue  |  ( atomicValue & 0x7FFFFFFF ) >>  32 - inputValue   },
-                { AtomicOps.RotateRight, (atomicValue, inputValue) =>  ( atomicValue & 0x7FFFFFFF ) >> inputValue  |  ( atomicValue & 0x7FFFFFFF ) <<  32 - inputValue   }
-            };
-        }
-
-        public static Dictionary<AtomicOps, Func<uint, int, uint>> Unsigned32ShiftOperations()
-        {
-            return new Dictionary<AtomicOps, Func<uint, int, uint>>()
-            {
-                { AtomicOps.LeftShift, (atomicValue, inputValue) => atomicValue << inputValue },
-                { AtomicOps.RightShift, (atomicValue, inputValue) => atomicValue >> inputValue },
-                { AtomicOps.RotateLeft, (atomicValue, inputValue) =>  atomicValue << inputValue  |  atomicValue >>  32 - inputValue   },
-                { AtomicOps.RotateRight, (atomicValue, inputValue) =>  atomicValue >> inputValue  |  atomicValue <<  32 - inputValue   }
-            };
+            return ( ( uint ) ( value & uint.MaxValue ) );
         }
 
 
-
-        public static Dictionary<AtomicOps, Func<short, int, short>> Signed16BitwiseOperations()
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static int UlongToInt( ulong value )
         {
-            return new Dictionary<AtomicOps, Func<short, int, short>>()
-            {
-                { AtomicOps.And, (atomicValue, inputValue) => ( short ) (  atomicValue & 0xFFFF  & inputValue ) },
-                { AtomicOps.Or, (atomicValue, inputValue) => ( short ) (  atomicValue & 0xFFFF  | inputValue ) },
-                { AtomicOps.Xor, (atomicValue, inputValue) => ( short ) (  atomicValue & 0xFFFF  ^ inputValue ) },
-                { AtomicOps.Not, (atomicValue, _) => ( short )  ~( atomicValue & 0xFFFF )  }
-            };
+            return ( ( int ) ( value & uint.MaxValue ) );
         }
 
-        public static Dictionary<AtomicOps, Func<ushort, int, ushort>> Unsigned16BitwiseOperations()
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static long UlongToLong( ulong value )
         {
-            return new Dictionary<AtomicOps, Func<ushort, int, ushort>>()
-            {
-                { AtomicOps.And, (atomicValue, inputValue) => ( ushort ) (  atomicValue & 0xFFFF  & inputValue ) },
-                { AtomicOps.Or, (atomicValue, inputValue) => ( ushort ) (  atomicValue & 0xFFFF  | inputValue ) },
-                { AtomicOps.Xor, (atomicValue, inputValue) => ( ushort ) (  atomicValue & 0xFFFF  ^ inputValue ) },
-                { AtomicOps.Not, (atomicValue, _) => ( ushort )  ~( atomicValue & 0x7FFF )  }
-            };
+            return ( ( long ) ( value ) );
         }
 
-        public static Dictionary<AtomicOps, Func<short, int, short>> Signed16ShiftOperations()
+
+        /*
+        * These are all our arithmetic, bitwise, bitshift operations.
+        */
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static T Add<T>( in T a, in T b ) where T : struct, IAdditionOperators<T, T, T>
         {
-            return new Dictionary<AtomicOps, Func<short, int, short>>()
-            {
-                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( short ) ( ( atomicValue & 0x7FFF ) << inputValue ) },
-                { AtomicOps.RightShift, (atomicValue, inputValue) => ( short ) ( ( atomicValue & 0x7FFF ) >> inputValue ) },
-                { AtomicOps.RotateLeft, (atomicValue, inputValue) => ( short ) (  ( atomicValue & 0x7FFF ) << inputValue  |  ( atomicValue & 0x7FFF ) >>  16 - inputValue   ) },
-                { AtomicOps.RotateRight, (atomicValue, inputValue) => ( short ) (  ( atomicValue & 0x7FFF ) >> inputValue  |  ( atomicValue & 0x7FFF ) <<  16 - inputValue   ) }
-            };
+            return a + b;
         }
 
-        public static Dictionary<AtomicOps, Func<ushort, int, ushort>> Unsigned16ShiftOperations()
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static T Subtract<T>( in T a, in T b ) where T : struct, ISubtractionOperators<T, T, T>
         {
-            return new Dictionary<AtomicOps, Func<ushort, int, ushort>>()
-            {
-                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( ushort ) ( ( atomicValue & 0xFFFF ) << inputValue ) },
-                { AtomicOps.RightShift, (atomicValue, inputValue) => ( ushort ) ( ( atomicValue & 0xFFFF ) >> inputValue ) },
-                { AtomicOps.RotateLeft, (atomicValue, inputValue) => ( ushort ) (  ( atomicValue & 0xFFFF ) << inputValue  |  ( atomicValue & 0xFFFF ) >>  16 - inputValue   ) },
-                { AtomicOps.RotateRight, (atomicValue, inputValue) => ( ushort ) (  ( atomicValue & 0xFFFF ) >> inputValue  |  ( atomicValue & 0xFFFF ) <<  16 - inputValue   ) }
-            };
+            return a - b;
         }
 
-        public static Dictionary<AtomicOps, Func<sbyte, int, sbyte>> Signed8BitwiseOperations()
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static T Multiply<T>( in T a, in T b ) where T : struct, IMultiplyOperators<T, T, T>
         {
-            return new Dictionary<AtomicOps, Func<sbyte, int, sbyte>>()
-            {
-                { AtomicOps.And, (atomicValue, inputValue) => ( sbyte ) (  atomicValue & 0x7F  & inputValue ) },
-                { AtomicOps.Or, (atomicValue, inputValue) => ( sbyte ) (  atomicValue & 0x7F  | inputValue ) },
-                { AtomicOps.Xor, (atomicValue, inputValue) => ( sbyte ) (  atomicValue & 0x7F  ^ inputValue ) },
-                { AtomicOps.Not, (atomicValue, _) => ( sbyte )  ~( atomicValue & 0xFF )  }
-            };
+            return a * b;
         }
 
-        public static Dictionary<AtomicOps, Func<byte, int, byte>> Unsigned8BitwiseOperations()
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static T Divide<T>( in T a, in T b ) where T : struct, IDivisionOperators<T, T, T>
         {
-            return new Dictionary<AtomicOps, Func<byte, int, byte>>()
-            {
-                { AtomicOps.And, (atomicValue, inputValue) => ( byte ) (  atomicValue & 0xFF  & inputValue ) },
-                { AtomicOps.Or, (atomicValue, inputValue) => ( byte ) (  atomicValue & 0xFF  | inputValue ) },
-                { AtomicOps.Xor, (atomicValue, inputValue) => ( byte ) (  atomicValue & 0xFF  ^ inputValue ) },
-                { AtomicOps.Not, (atomicValue, _) => ( byte )  ~( atomicValue & 0x7F )  }
-            };
+            return a / b;
         }
 
-        public static Dictionary<AtomicOps, Func<sbyte, int, sbyte>> Signed8ShiftOperations()
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static T Modulus<T>( in T a, in T b ) where T : struct, IModulusOperators<T, T, T>
         {
-            return new Dictionary<AtomicOps, Func<sbyte, int, sbyte>>()
-            {
-                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( sbyte ) ( ( atomicValue & 0x7F ) << inputValue ) },
-                { AtomicOps.RightShift, (atomicValue, inputValue) => ( sbyte ) ( ( atomicValue & 0x7F ) >> inputValue ) },
-                { AtomicOps.RotateLeft, (atomicValue, inputValue) => ( sbyte ) (  ( atomicValue & 0x7F ) << inputValue  |  ( atomicValue & 0x7F ) >>  8 - inputValue   ) },
-                { AtomicOps.RotateRight, (atomicValue, inputValue) => ( sbyte ) (  ( atomicValue & 0x7F ) >> inputValue  |  ( atomicValue & 0x7F ) <<  8 - inputValue   ) }
-            };
+            return a % b;
         }
 
-        public static Dictionary<AtomicOps, Func<byte, int, byte>> Unsigned8ShiftOperations()
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static T BitwiseAnd<T>( in T a, in T b ) where T : struct, IBitwiseOperators<T, T, T>
         {
-            return new Dictionary<AtomicOps, Func<byte, int, byte>>()
-            {
-                { AtomicOps.LeftShift, (atomicValue, inputValue) => ( byte ) ( ( atomicValue & 0xFF ) << inputValue ) },
-                { AtomicOps.RightShift, (atomicValue, inputValue) => ( byte ) ( ( atomicValue & 0xFF ) >> inputValue ) },
-                { AtomicOps.RotateLeft, (atomicValue, inputValue) => ( byte ) (  ( atomicValue & 0xFF ) << inputValue  |  ( atomicValue & 0xFF ) >>  8 - inputValue   ) },
-                { AtomicOps.RotateRight, (atomicValue, inputValue) => ( byte ) (  ( atomicValue & 0xFF ) >> inputValue  |  ( atomicValue & 0xFF ) <<  8 - inputValue   ) }
-            };
+            return a & b;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static T BitwiseOr<T>( in T a, in T b ) where T : struct, IBitwiseOperators<T, T, T>
+        {
+            return a | b;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static T BitwiseXor<T>( in T a, in T b ) where T : struct, IBitwiseOperators<T, T, T>
+        {
+            return a ^ b;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static T BitwiseNot<T>( in T a ) where T : struct, IBitwiseOperators<T, T, T>
+        {
+            return ~a;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ulong RightShift( in ulong a, in int b )
+        {
+            return a >> b;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static uint RightShift( in uint a, in int b )
+        {
+            return a >> b;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ushort RightShift( in ushort a, in int b )
+        {
+            return ( ( ushort ) ( ( ( uint ) a ) >> b ) );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static byte RightShift( in byte a, in int b )
+        {
+            return ( ( byte ) ( ( ( uint ) a ) >> b ) );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ulong LeftShift( in ulong a, in int b )
+        {
+            return a << b;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static uint LeftShift( in uint a, in int b )
+        {
+            return a << b;
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ushort LeftShift( in ushort a, in int b )
+        {
+            return ( ( ushort ) ( ( ( uint ) a ) << b ) );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static byte LeftShift( in byte a, in int b )
+        {
+            return ( ( byte ) ( ( ( uint ) a ) << b ) );
+        }
+
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static uint RotateLeft( in byte a, in int b )
+        {
+            return BitOperations.RotateLeft( a, b );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static uint RotateLeft( in ushort a, in int b )
+        {
+            return BitOperations.RotateLeft( a, b );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static uint RotateLeft( in uint a, in int b )
+        {
+            return BitOperations.RotateLeft( a, b );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ulong RotateLeft( in ulong a, in int b )
+        {
+            return BitOperations.RotateLeft( a, b );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static uint RotateRight( in byte a, in int b )
+        {
+            return BitOperations.RotateRight( a, b );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static uint RotateRight( in ushort a, in int b )
+        {
+            return BitOperations.RotateRight( a, b );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static uint RotateRight( in uint a, in int b )
+        {
+            return BitOperations.RotateRight( a, b );
+        }
+
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        public static ulong RotateRight( in ulong a, in int b )
+        {
+            return BitOperations.RotateRight( a, b );
+        }
+
+
+        public enum AtomicOperation
+        {
+            Addition = 0,
+            Subtraction = 1,
+            Multiplication = 2,
+            Division = 3,
+            Modulus = 4,
+            BitShiftR = 5,
+            BitShiftL = 6,
+            BitwiseAnd = 7,
+            BitwiseOr = 8,
+            BitwiseXor = 9,
+            BitwiseNot = 10,
+            RotateLeft = 11,
+            RotateRight = 12
         }
     }
+
 }

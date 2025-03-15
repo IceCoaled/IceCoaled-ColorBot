@@ -1,5 +1,5 @@
-﻿using System.Runtime.InteropServices;
-using Utils;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace SCB
 {
@@ -7,28 +7,31 @@ namespace SCB
     /// <summary>
     /// Class for handling mouse input, or keyboard input. large room for expansion.
     /// </summary>
-    internal static class MouseInput
+    internal static partial class HidInputs
     {
-
         /// <summary>
-        /// Checks whether a specified key is held down.
+        /// Checks most significat bit to see if its zero or one
         /// </summary>
-        /// <param name="aimKey">The virtual key code of the key to check.</param>
-        /// <returns>Returns true if the key is being held, otherwise false.</returns>
-        internal static bool IsKeyHeld( ref int Key )
+        /// <param name="Key">The virtual key code of the key to check.</param>
+        /// <returns>Returns true if the key is being pressed, otherwise false.</returns>
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        internal static bool IsKeyPressed( ref int Key )
         {
-            return ( ( int ) GetAsyncKeyState( Key ) & 0x8000 ) != 0;
+            return ( GetAsyncKeyState( Key ) & 0x8000 ) != 0;
         }
 
 
         /// <summary>
-        /// Checks whether a specified key was pressed since the last call.
+        /// Moves the mouse cursor relative to its current position.
+        /// This method is faster than the other one, but it requires the caller to create the INPUT array.
+        /// This is done to avoid creating a new array every time the method is called.
+        /// We also remove any checks for any of the data, as we assume the caller has already done them.
         /// </summary>
-        /// <param name="Key">The virtual key code of the key to check.</param>
-        /// <returns>Returns true if the key is being pressed, otherwise false.</returns>
-        internal static bool IsKeyPressed( ref int Key )
+        /// <param name="inputs">Takes single inout and we cast to array</param>
+        [MethodImpl( MethodImplOptions.AggressiveInlining )]
+        internal static void CustomMoveRelativeMouse( ref INPUT input )
         {
-            return ( GetAsyncKeyState( Key ) & 0x0001 ) != 0; // Low-order bit indicates if the key was pressed since last call.
+            _ = SendInput( 1u, [ input ], Marshal.SizeOf<INPUT>() );
         }
 
         /// <summary>
@@ -38,7 +41,7 @@ namespace SCB
         /// <param name="y">The Y movement (relative).</param>
         internal static void MoveRelativeMouse( ref float x, ref float y )
         {
-            if ( x != 0 || y != 0 )
+            if ( float.Abs( x ) <= 0.00001 || float.Abs( y ) <= 0.00001 )
             {
                 INPUT[] tempInput = new INPUT[ 1 ];
                 ref INPUT temp = ref tempInput[ 0 ];
@@ -49,7 +52,7 @@ namespace SCB
                 temp.Data.Mouse.Time = 0;
                 temp.Data.Mouse.X = ( int ) Math.Round( x );
                 temp.Data.Mouse.Y = ( int ) Math.Round( y );
-                SendInput( 1, tempInput, Marshal.SizeOf( tempInput[ 0 ] ) );
+                _ = SendInput( 1, tempInput, Marshal.SizeOf( tempInput[ 0 ] ) );
             }
         }
 
@@ -68,16 +71,12 @@ namespace SCB
             temp.Data.Mouse.MouseData = 0;
             temp.Data.Mouse.Time = 0;
 
-            // Ensure x and y are clamped within the range [0.0, 1.0]
-            x = Mathf.Clamp01( x );
-            y = Mathf.Clamp01( y );
-
             // Multiply by ABSOLUTE_MOUSE_COOR_MAX (65535.0) to convert to absolute coordinates
-            temp.Data.Mouse.X = ( int ) ( x * ABSOLUTE_MOUSE_COOR_MAX );
-            temp.Data.Mouse.Y = ( int ) ( y * ABSOLUTE_MOUSE_COOR_MAX );
+            temp.Data.Mouse.X = ( ( int ) ( Mathf.Clamp01( x ) * ABSOLUTE_MOUSE_COOR_MAX ) );
+            temp.Data.Mouse.Y = ( ( int ) ( Mathf.Clamp01( y ) * ABSOLUTE_MOUSE_COOR_MAX ) );
 
             // Send the input event
-            SendInput( 1, tempInput, Marshal.SizeOf( tempInput[ 0 ] ) );
+            _ = SendInput( 1, tempInput, Marshal.SizeOf<INPUT>() );
         }
 
         /// <summary>
@@ -95,7 +94,7 @@ namespace SCB
             temp.Data.Mouse.Time = 0;
             temp.Data.Mouse.X = 0;
             temp.Data.Mouse.Y = 0;
-            SendInput( 1, tempInput, Marshal.SizeOf( tempInput[ 0 ] ) );
+            _ = SendInput( 1, tempInput, Marshal.SizeOf<INPUT>() );
         }
 
         /// <summary>
@@ -132,7 +131,7 @@ namespace SCB
             inputs[ 3 ].Data.Keyboard.Vk = 0x5B; // Virtual key code for left Windows key
             inputs[ 3 ].Data.Keyboard.Flags = KEYEVENTF_KEYUP;
 
-            SendInput( ( uint ) inputs.Length, inputs, Marshal.SizeOf( typeof( INPUT ) ) );
+            _ = SendInput( ( uint ) inputs.Length, inputs, Marshal.SizeOf<INPUT>() );
         }
 
         // Structs and constants used for mouse and keyboard input.
@@ -227,13 +226,13 @@ namespace SCB
         /// <param name="inputs">input structs array</param>
         /// <param name="sizeOfInputs">Total size of array</param>
         /// <returns></returns>
-        [DllImport( "user32.dll" )]
+        [DllImport( "user32.dll", SetLastError = true )]
         private static extern uint SendInput( uint numberOfInputs, INPUT[] inputs, int sizeOfInputs );
 
-        [DllImport( "user32.dll" )]
+        [DllImport( "user32.dll", SetLastError = true )]
         public static extern bool GetCursorPos( ref Point lpPoint );
 
-        [DllImport( "user32.dll" )]
+        [DllImport( "user32.dll", SetLastError = true )]
         public static extern void SetCursorPos( int x, int y );
 
         /// <summary>

@@ -1,10 +1,10 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 
 
 
-namespace SCB
+namespace SCB.DirectX
 {
-    public class RenderDocApi
+    public partial class RenderDocApi
     {
         // Path to RenderDoc
         private readonly string RendorDocFilePath = Path.Combine( Environment.GetFolderPath( Environment.SpecialFolder.ProgramFiles ), "RenderDoc" );
@@ -163,7 +163,7 @@ namespace SCB
         /// </summary>
         /// <param name="dirPath">Path to renderdoc folder</param>
         /// <returns>Returns the api number with the minor normalized and </returns>
-        private int GetApiVersionFromJson( string dirPath )
+        private static int GetApiVersionFromJson( string dirPath )
         {
 
             // Concatenate the path
@@ -179,19 +179,15 @@ namespace SCB
 
             int versionNum = -1;
 
-            foreach ( string line in lines )
+            lines.Where( line => line.Contains( "api_version" ) ).ToList().ForEach( line =>
             {
-                // Find the api_version line
-                if ( line.Contains( "api_version" ) )
-                {
-                    string[] split = line.Split( '"' );
-                    string version = split[ 3 ][ ..^1 ];
-                    version = version.Replace( ".", "0" );
+                string[] split = line.Split( '"' );
+                string version = split[ 3 ][ ..^1 ];
+                version = version.Replace( ".", "0" );
+                // remove last 2 characters and get the rest of the line
+                versionNum = int.Parse( version[ ..^1 ] );
+            } );
 
-                    // remove last 2 characters and get the rest of the line
-                    versionNum = int.Parse( version[ ..^1 ] );
-                }
-            }
 
             // Now we pack the version number.
             if ( versionNum != -1 )
@@ -204,11 +200,11 @@ namespace SCB
         }
 
         // LoadLibrary Helper
-        [DllImport( "kernel32.dll", CharSet = CharSet.Auto )]
+        [DllImport( "kernel32.dll", SetLastError = true )]
         private static extern IntPtr GetModuleHandle( string lpModuleName );
 
         // GetProcAddress Helper
-        [DllImport( "kernel32.dll", CharSet = CharSet.Ansi )]
+        [DllImport( "kernel32.dll", SetLastError = true )]
         private static extern IntPtr GetProcAddress( IntPtr hModule, string procName );
 
 

@@ -1,964 +1,985 @@
-
 #include "ShaderDefines.hlsli"
-
-///-------Struct-Constructor-Functions----///
-
-inline BoundingBox BoundingBoxCTOR( uint2 minimum, uint2 maximum, uint id, uint link )
-{
-    BoundingBox result;
-    result.min = minimum;
-    result.max = maximum;
-    result.linked = link;
-    result.uniqueId = id;
-    return result;
-}
-
-inline HairCentroid HairCentroidCTOR( uint2 pos, uint id, uint link )
-{
-    HairCentroid result;
-    result.linked = link;
-    result.position = pos;
-    result.uniqueId = id;
-    return result;
-}
-
-inline HairCluster HairClusterCTOR( uint2 avgPos, uint szCluster, uint2 posArry [ THREAD_GROUP_SIZE ] )
-{
-    HairCluster result;
-    result.averagePos = avgPos;
-    result.clusterSize = szCluster;
-    result.positions = posArry;
-    return result;
-}
-
-inline void HairClusterPosCTOR( uint threadIdY, inout uint2 posArry [ THREAD_GROUP_SIZE ] )
-{
-    posArry [ threadIdY ] = uint2( 0, 0 );
-}
-
-inline PlayerPosition PlayerPositionCTOR(uint2 headPos, uint2 torsoPos, uint4x2 bb )
-{
-    PlayerPosition result;
-    result.bodyPosition = torsoPos;
-    result.headPosition = headPos;
-    result.boundingBox = bb;
-    return result;
-}
-
-
-
-///------Group-Matrix-Functions-------///
-
-// Reads and writes to group matrix.
-inline uint ReadGroupMatrix( const uint2 localId )
-{
-    uint result = MAX_UINT;
-    if ( localId.x < X_THREADGROUP && localId.y < Y_THREADGROUP )
-    {
-        if ( localId.y == 0 )
-            result = localSharedMatrix.row0 [ localId.x ];
-        else if ( localId.y == 1 )
-            result = localSharedMatrix.row1 [ localId.x ];
-        else if ( localId.y == 2 ) 
-            result = localSharedMatrix.row2 [ localId.x ];
-        else 
-            result = localSharedMatrix.row3 [ localId.x ];
-    }    
-    return result;
-}
-
-
-inline void WriteGroupMatrix( const uint2 localId, uint value )
-{
-    uint dummy = 0;
-    if ( localId.x < X_THREADGROUP && localId.y < Y_THREADGROUP)
-    {
-        if ( localId.y == 0 )
-            InterlockedExchange( localSharedMatrix.row0 [ localId.x ], value, dummy );
-        else if ( localId.y == 1 )
-            InterlockedExchange( localSharedMatrix.row1 [ localId.x ], value, dummy );
-        else if ( localId.y == 2 )
-            InterlockedExchange( localSharedMatrix.row2 [ localId.x ], value, dummy ); 
-        else 
-        InterlockedExchange( localSharedMatrix.row3 [ localId.x ], value, dummy );
-    }   
-}
-
-// Check if the current pixel is the same as the pixel type.
-inline bool VerifyPixel( const uint pixelType, const uint2 localPos, int2 scanOffset )
-{
-    bool result = false;
-    if ( localPos.x < X_THREADGROUP && localPos.y < Y_THREADGROUP )
-    {
-        uint2 localIndex = ( localPos + scanOffset );
-        uint pixelCheck = ReadGroupMatrix( uint2( clamp( localIndex, uint2( 0, 0 ), uint2( X_THREADGROUP, Y_THREADGROUP ) ) ) );
-        result = ( pixelType == pixelCheck );
-    }
-    return result;
-}
 
 
 ///---------Utility-Functions--------///
 
-// Calculates the distance between two points and checks if it's within a threshold.
-inline bool DetectGrouping( const uint2 pos1, const uint2 pos2, const uint threshold )
+
+// These functions are used to check a thread id, group id or local( group thread ) id
+// Against a target, this is done to block out threads, groups or group threads
+// They are all defaulted to 0,0 for ease, but can be changed to any value
+inline bool IsTargetThread( const uint2 threadId, const uint2 target )
 {
-    float dx = max( pos1.x, pos2.x ) - min( pos1.x, pos2.x );
-    float dy = max( pos1.y, pos2.y ) - min( pos1.y, pos2.y );
-    return sqrt( float( pow( dx, 2.0 ) + pow( dy, 2.0 ) ) ) <= float( threshold ) ? true : false;
+	return all( threadId == target );
 }
 
-// Generate random id with our incrementel base value
-inline uint GenerateUniqueId()
+inline bool IsTargetGroup( const uint2 groupId, const uint2 target )
 {
-    uint baseValue = PlayerPositionBuffer [ 1 ].UID_BASE_VALUE;
-    uint hash = 0x0F01010;
-
-    // Apply alogrithm
-    // This comes from my github repo for my custom string hashing asm function
-    // With 3 small changes or hash value starts much lower,
-    // and we shift right for the last step so our value doesnt get to big.
-    // We also dont touch the hash value since its used once
-    // https://github.com/IceCoaled/UserMode-KernelMode-Asm-Functions/blob/main/CustomHash.asm
-    baseValue *= hash;
-    baseValue = ROR( baseValue, 0x010 );
-    baseValue >>= 0x6;
-      
-    // Increment base value
-    InterlockedAdd( PlayerPositionBuffer [ 1 ].UID_BASE_VALUE, 0x01 );
-  
-    return baseValue;
+	return all( groupId == target );
 }
 
-// Custom distance function that takes uint2's.
-inline float Distance( uint2 pos1, uint2 pos2 )
+inline bool IsTargetGroupThread( const uint2 localId, const uint2 target )
 {
-    uint dx = max( pos1.x, pos2.x ) - min( pos1.x, pos2.x );
-    uint dy = max( pos1.y, pos2.y ) - min( pos1.y, pos2.y );
-    return sqrt( float( pow( dx, 2 ) + pow( dy, 2 ) ) );
+	return all( localId == target );
 }
 
-// Checks if input name is one of the range names.
-uint CompareNames( min16uint3 name [ 2 ] )
+// This function is used to check if a pixel thread is outside the texture
+inline bool IsOutsideTexture( const uint2 threadId )
+{
+	return all( threadId > uint2( WINDOW_SIZE_X, WINDOW_SIZE_Y ) );
+}
+
+inline bool IsInHudBlock( const uint threadIdY )
+{
+	return threadIdY > BOTTOM_HUD_BLOCK;
+}
+
+// A helper function to check if a pixel is within 3 pixels 
+// Of a set of min and max positions
+inline bool IsWithin3PixelBorder( const uint2 pos, const uint2 minPos, const uint2 maxPos )
+{
+    // Inside the bounding box:
+	bool result = false;
+
+	if ( ( ( pos.x >= minPos.x ) & ( pos.x <= maxPos.x ) ) && 
+    ( ( pos.y >= minPos.y ) & ( pos.y <= maxPos.y ) ) )
+	{
+        // Near left or right edge                                              
+		if ( ( ( pos.x - minPos.x ) <= 2 | ( maxPos.x - pos.x ) <= 2 ) || 
+        ( ( ( pos.y - minPos.y ) <= 2 ) | ( maxPos.y - pos.y ) <= 2 ) )  //< Near top or bottom edge
+		{
+			result = true;
+		}
+	}
+	return result;
+}
+
+
+// Verifies if the pixel is within the scan box
+inline bool IsWithinScanBox( const uint2 threadId )
+{
+	return all( threadId >= SCAN_BOX_MIN ) && all( threadId <= SCAN_BOX_MAX );
+}
+
+inline bool IsGroupOverScanBox( const uint2 groupId )
+{
+	return !( groupId.x * X_THREADGROUP + X_THREADGROUP <= SCAN_BOX_MIN.x ||
+      groupId.x * X_THREADGROUP >= SCAN_BOX_MAX.x ||
+      groupId.y * Y_THREADGROUP + Y_THREADGROUP <= SCAN_BOX_MIN.y ||
+      groupId.y * Y_THREADGROUP >= SCAN_BOX_MAX.y );
+}
+
+// Checks to see if pixel is empty using a threshold
+// That is the default functionality but you can change the epsilon
+// and use to check the pixel is under a certain value for each swizzle
+// This is specifically checking each swizzle as i ran into a problem previously
+// Trying to use all / any for checking if the pixel read from the texture was successful
+// I.E out of bounds was causing massive issues with false positives
+inline bool IsZero( float4 color, float epsilon = 0.00001 )
+{
+    return abs( color.x ) < epsilon &&
+           abs( color.y ) < epsilon &&
+           abs( color.z ) < epsilon &&
+           abs( color.w ) < epsilon;
+}
+
+inline bool IsZero( uint4 target, float epsilon = 0.00001 )
+{
+    return int( target.x ) < epsilon &&
+           int( target.y ) < epsilon &&
+           int( target.z ) < epsilon &&
+           int( target.w ) < epsilon;
+}
+
+
+// Calculates the distance between two points and checks if it's within a threshold
+inline bool DetectGrouping( const uint2 pos1, const uint2 pos2, const float epsilon )
+{
+    return abs( distance( float2( pos1 ), float2( pos2 ) ) ) <= epsilon;
+}
+
+// These functions are for creating a uint4 vector and then checking the resulting vector
+// this is done to reduce branching
+inline bool OutlinesCmpHelper( const uint4 name )
+{
+    return IsZero( name - COLOR_NAME_OUTLNZ );
+}
+
+inline bool HairCmpHelper( const uint4 name )
+{
+    return IsZero( name - COLOR_NAME_HAIR );
+}
+
+
+// Gets the pixel classification for group class matrix from range name
+uint GetPixelClassFromName( const uint4 name )
 {
     uint result = NO_MATCHING_NAME;
-    if ( !any( name [ 0 ] - COLOR_NAME_OUTLNZ [ 0 ] ) & !any( name [ 1 ] - COLOR_NAME_OUTLNZ [ 1 ] ) )
+    if ( OutlinesCmpHelper( name ) )
     {
         result = PX_OUTLINE;
     }
-    else if ( !any( name [ 0 ] - COLOR_NAME_HAIR [ 0 ] ) & !any( name [ 1 ] - COLOR_NAME_HAIR [ 1 ] ) )
+    else if ( HairCmpHelper( name ) )
     {
         result = PX_HAIR;
-    }
-    else if ( !any( name [ 0 ] - COLOR_NAME_SKIN [ 0 ] ) & !any( name [ 1 ] - COLOR_NAME_SKIN [ 1 ] ) )
-    {
-        result = PX_SKIN;
     }
     return result;
 }
 
-// Converts group id to single uint for bounding box id.
-inline uint GlobalPosToUID( const uint2 globalPos )
+inline bool CompareNames( const uint4 name1, const uint4 name2 )
 {
-    return uint( ( globalPos.x & 0x0000FFFF ) ) | uint( ( globalPos.y & 0x0000FFFF ) >> 0x010 );
+    bool result = false;
+    if ( IsZero( name1 - name2 ) )
+    {
+        result = true;
+    }
+    return result;
 }
 
-// Calculate the current segment.
-// This goes down to the nearest segment size.
-// Then sets the current segment to a segment index with 0 based index.
-inline uint SegmentCalc( const uint2 localPos )
+///--------------Group-Clusters-Buffer-Functions----------------///
+
+
+inline uint GetGroupStatus( const uint2 localId, const uint groupDataIndex )
 {
-    return ( ( localPos.x + SEGMENT_SIZE ) & ~( SEGMENT_SIZE - 0x01 ) ) / ( SEGMENT_SIZE - 0x01 );
+	const int bitIndex = ( localId.x & ( GROUP_DATA_PER_UINT - 1 ) ) << GROUP_DATA_PER_BYTE;
+	const uint pxData = GroupDataBuffer [ groupDataIndex ].statusPxlType [ localId.x >> GROUP_DATA_PER_BYTE ] [ localId.y ];
+	return ( pxData >> bitIndex ) & BITS2_MASK;
 }
 
-// Calculates the threads position inside the thread group segment
-inline uint SegmentPosCalc( uint2 localPos )
+inline uint GetGroupPixelType( const uint2 localId, const uint groupDataIndex )
 {
-    return uint( localPos.y % SEGMENT_SIZE );
+	const int bitIndex = ( ( localId.x & ( GROUP_DATA_PER_UINT - 1 ) ) << GROUP_DATA_PER_BYTE ) + GROUP_DATA_PER_BYTE;
+	uint pxData = GroupDataBuffer [ groupDataIndex ].statusPxlType [ localId.x >> GROUP_DATA_PER_BYTE ] [ localId.y ];
+	return ( pxData >> bitIndex ) & BITS2_MASK;
 }
 
-// Checks to see if group min max have been merged.
-inline bool IsGroupMerged( uint2 min, uint2 max )
+inline void SetGroupStatus( const uint status, const uint2 localId, const uint groupDataIndex )
 {
-    uint2 merged = uint2( MERGED_FLAG, MERGED_FLAG );
-
-    return !any( min - merged ) & !any( max - merged );
+	const int bitIndex = ( gmGroupDataIndex & ( GROUP_DATA_PER_UINT - 1 ) ) << GROUP_DATA_PER_BYTE;
+	InterlockedAnd( GroupDataBuffer [ groupDataIndex ].statusPxlType [ localId.x >> GROUP_DATA_PER_BYTE ] [ localId.y ], ~( BITS2_MASK << bitIndex, DUMMY_UINT ) );
+	InterlockedOr( GroupDataBuffer [ groupDataIndex ].statusPxlType [ localId.x >> GROUP_DATA_PER_BYTE ] [ localId.y ], ( status & BITS2_MASK ) << bitIndex, DUMMY_UINT );
 }
 
-// Group or local position to global position.
-inline void GroupBBToGlobalBB( uint2 groupMin, uint2 groupMax, const uint2 groupId, out uint4x2 globalPos )
+inline void SetGroupPixelType( const uint pixelType, const uint2 localId, const uint groupDataIndex )
 {
-    // Create thread group size int2, this shrinks the stack size. as you could use `int2( X_THREADGROUP, Y_THREADGROUP )` in each calculation.
-    // But that would create 4 int2's on the stack, this way we only create 1.
-    uint2 groupSize = uint2( X_THREADGROUP, Y_THREADGROUP );
-  
-    // Calculate the global texture positions.
-    globalPos = uint4x2( groupId * groupSize + groupMin,
-    groupId * groupSize + uint2( groupMin.x, groupMax.y ),
-    groupId * groupSize + uint2( groupMax.x, groupMin.y ),
-    groupId * groupSize + groupMax );
+	const int bitIndex = ( ( localId.x & ( GROUP_DATA_PER_UINT - 1 ) ) << GROUP_DATA_PER_BYTE ) + GROUP_DATA_PER_BYTE;
+	InterlockedAnd( GroupDataBuffer [ groupDataIndex ].statusPxlType [ localId.x >> GROUP_DATA_PER_BYTE ] [ localId.y ], ~( BITS2_MASK << bitIndex, DUMMY_UINT ) );
+	InterlockedOr( GroupDataBuffer [ groupDataIndex ].statusPxlType [ localId.x >> GROUP_DATA_PER_BYTE ] [ localId.y ], ( pixelType & BITS2_MASK ) << bitIndex, DUMMY_UINT );
 }
 
-// Calculates global position from group position
-inline uint2 GroupPosToGlobal( uint2 groupPos, const uint2 groupId )
+inline int GetGroupDataIndex( const uint2 groupId )
 {
-    uint2 groupSize = uint2( X_THREADGROUP, Y_THREADGROUP );    
-    return uint2( groupId * groupSize + groupPos );
+	int2 groupPos;	
+	groupPos.x = ( groupId.x * X_THREADGROUP ) - FIRST_GROUP_OVERLAP.x;
+	groupPos.y = ( groupId.y * Y_THREADGROUP ) - FIRST_GROUP_OVERLAP.y;
+	return ( groupPos.y * SCAN_GROUPS_X ) + groupPos.x;
 }
 
-inline uint2 GetTorsoPos( inout uint4x2 boundingBox )
+inline void SetCluster( const uint groupDataIndex )
 {
-    return ( boundingBox [ 0 ] + boundingBox [ 1 ] + boundingBox [ 2 ] + boundingBox [ 3 ] ) * 0.25;
-}
-
-// Returns true if the two values are within the threshold.
-inline bool PlusMinus( uint value1, uint value2, uint threshold )
-{
-    return asuint( max( value1, value2 ) - min( value1, value2 ) ) <= threshold ? true : false;
-}
-
-// Overload for uint2.
-inline bool PlusMinus( uint2 value1, uint2 value2, uint threshold )
-{
-    return asuint( max( value1, value2 ).x - min( value1, value2 ).x ) <= threshold &&
-    asuint( max( value1, value2 ).y - min( value1, value2 ).y ) <= threshold ? true : false;
-}
-
-// Checks the positions of the hair centroid in relation to the bounding box.
-inline bool BbToHairLink( uint2 bbMin, uint2 bbMax, uint2 hairPos )
-{
-    return PlusMinus( hairPos.x, bbMin.x, ( ( bbMax.x - bbMin.x ) / 2 ) + 10 ) &&
-    PlusMinus( hairPos.x, bbMax.x, ( ( bbMax.x - bbMin.x ) / 2 ) + 10 ) &&
-    PlusMinus( hairPos.y, bbMin.y, ( ( bbMax.y - bbMin.y ) / 3 ) );
+	const uint allowance = uint( lerp( 5.0, 20.0, saturate( float( ( gmHairCluster.outlinePos.z - gmHairCluster.outlinePos.x ) - MIN_HEAD_SIZE / ( MAX_HEAD_SIZE - MIN_HEAD_SIZE ) ) ) ) );
+	InterlockedExchange( GroupDataBuffer [ groupDataIndex ].hairCentroid.allowance, allowance, DUMMY_UINT );
+	InterlockedExchange( GroupDataBuffer [ groupDataIndex ].hasCluster, CLUSTER_AVAILABLE, DUMMY_UINT );
+	InterlockedExchange( GroupDataBuffer [ groupDataIndex ].hairCentroid.outlinePos.x, gmHairCluster.outlinePos.x, DUMMY_UINT );
+	InterlockedExchange( GroupDataBuffer [ groupDataIndex ].hairCentroid.outlinePos.y, gmHairCluster.outlinePos.y, DUMMY_UINT );
+	InterlockedExchange( GroupDataBuffer [ groupDataIndex ].hairCentroid.outlinePos.z, gmHairCluster.outlinePos.z, DUMMY_UINT );
+	InterlockedExchange( GroupDataBuffer [ groupDataIndex ].hairCentroid.outlinePos.w, gmHairCluster.outlinePos.w, DUMMY_UINT );
+	InterlockedExchange( GroupDataBuffer [ groupDataIndex ].hairCentroid.clusterSize, gmHairCluster.clusterSize, DUMMY_UINT );
 }
 
 
-// returns true if global pixel is within 1 of the pixel coordinates connecting the 4 corners
-bool IsPixelBoundingBox( uint2 globalPos, uint4x2 boundingBox )
+///---------------Scan-Box-Buffer-Functions----------------///
+
+
+// Helper function to set the scan box byte value to 0
+inline void ClearScanBoxByte( const int byteIndex )
 {
-    bool2 result = bool2( false, false );
-    // Checks for top and bottom horizontial lines.
-    result.x = ( PlusMinus( globalPos.x, boundingBox [ 0 ].x, 0x01 ) || PlusMinus( globalPos.x, boundingBox [ 1 ].x, 0x01 ) ) &&
-    ( ( globalPos.y >= boundingBox [ 0 ].y - 1 ) || ( globalPos.y <= boundingBox [ 2 ].y + 1 ) );
-      
-  
-    // Checks for left and right virtical lines
-    result.y = ( PlusMinus( globalPos.y, boundingBox [ 0 ].y, 0x01 ) || PlusMinus( globalPos.y, boundingBox [ 2 ].y, 0x01 ) )  &&
-    ( ( globalPos.x >= boundingBox [ 0 ].x - 1 ) || ( globalPos.x <= boundingBox [ 1 ].x + 1 ) );
+	if ( byteIndex >= 0 && byteIndex < MAX_SCAN_BOX_BUFFER_INDEX )
+	{
+		// Sets all bits in the byte to 0
+		ScanBoxBuffer.InterlockedAnd( byteIndex, ~( MAX_BYTE ), DUMMY_UINT );
+	}
+}
+
+
+// This function is used to get the index data for the pixel in the scan box data buffer
+inline void GetScanBoxIndexing( const uint2 threadId, inout int pixelIndex, inout int bitIndex, inout int byteIndex )
+{
+	pixelIndex = ( ( threadId.y - SCAN_BOX_MIN.y ) * SCAN_FOV.x ) + ( threadId.x - SCAN_BOX_MIN.x );
+	bitIndex = ( ( pixelIndex & ( CLASSIFICATIONS_PER_UINT - 1 ) ) << 1 );
     
-    return result.x | result.y;
+	if ( pixelIndex < CLASSIFICATIONS_PER_UINT )
+	{
+		byteIndex = bitIndex >> 2;
+	}
+	else
+	{
+		byteIndex = ( pixelIndex >> 4 ) << 2;
+	}    
 }
 
+// Read classification from scan box matrix
+inline uint ReadScanBoxClass( const int bitPos, const int byteIndex )
+{
+	uint result = MAX_UINT;
+	if ( byteIndex >= 0 && byteIndex < MAX_SCAN_BOX_BUFFER_INDEX )
+	{
+		result = ( ScanBoxBuffer.Load( byteIndex ) >> bitPos ) & BITS2_MASK;
+	}		
+	return result;
+}
+
+
+// Write classification to scan box matrix
+// this is a trick to write the classification to the scan box
+// Without needing to use store or sync operations
+// We clear the bits at the position we want to write to
+// Then we set the bits to the classification we want to write
+inline void WriteScanBoxClass( const uint classification, const int bitPos, const int byteIndex )
+{
+	if ( byteIndex >= 0 && byteIndex < MAX_SCAN_BOX_BUFFER_INDEX )
+	{
+		ScanBoxBuffer.InterlockedAnd( byteIndex, ~( BITS2_MASK << bitPos ), DUMMY_UINT );
+		ScanBoxBuffer.InterlockedOr( byteIndex, ( classification & BITS2_MASK ) << bitPos, DUMMY_UINT );
+	}
+}
+
+// Helper to verify if a label is the same as the pixel type
+inline bool VerifyScanBoxPixel( const int bitPos, const int byteIndex, const uint pixelType )
+{
+	return ReadScanBoxClass( bitPos, byteIndex ) == pixelType;
+}
+
+
+// Overload of the above function that takes a pixel index
+// this is optimized for loops that scan the scan box
+inline bool VerifyScanBoxPixel( const uint2 threadId, inout int pixelIndex, inout int bitIndex, inout int byteIndex, const uint pixelType )
+{  
+	pixelIndex = 0;
+    bitIndex = 0;
+	byteIndex = 0;	
+	GetScanBoxIndexing( threadId, pixelIndex, bitIndex, byteIndex );
+	return ReadScanBoxClass( bitIndex, byteIndex ) == pixelType;
+}
+
+///-----Detected-Players-Buffer-Functions------///
+
+// This function initalizes the global scanbox bounding box
+// For the detected players to the values needed to properly
+// Min / Max for the bounding box
+// Always set the max values to the minimum possible value
+// And the min values to the maximum possible value
+inline void InitializeDPMaxMin()
+{
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].scanBoxBB.bbMax.x, MIN_UINT, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].scanBoxBB.bbMax.y, MIN_UINT, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].scanBoxBB.bbMin.x, MAX_UINT, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].scanBoxBB.bbMin.y, MAX_UINT, DUMMY_UINT );
+}
+
+inline uint CheckMinMax()
+{
+	uint2 min = PlayerPositionBuffer [ 0 ].scanBoxBB.bbMin;
+	const uint2 max = PlayerPositionBuffer [ 0 ].scanBoxBB.bbMax;
+	if ( !IsWithinScanBox( min ) || !IsWithinScanBox( max ) )
+	{
+		min.x = STATUS_NO_MIN_MAX;
+	}
+	else
+	{
+		min.x = STATUS_OK;
+	}
+	return min.x;
+}
 
 ///---------------Main-Shader-Functions----------------///
 
-// Connect missing outline pixels.
-// This will be done 2 or 3 times, this way we can connect all the outline pixels.
-void FindOutlineConnection( const uint2 localPos, const uint pixelType, uint failedThread )
+
+// This is a helper function if no hair centroids are detected
+// We just assume there is 1 player and set the player details
+// It will only be ran by thread 0,0
+void NoPlayersDetected( const uint2 bbMin, const uint2 bbMax )
 {
-    uint blockThread = 0;
-    // if the current pixel is already an outline pixel, return.  
-    if ( VerifyPixel( PX_OUTLINE, localPos, 0 ) )
-    {
-        blockThread = 1;
-    }
+	// Create actual bounding box
+	// Manually initialise so we know we are setting the correct values
+	uint4x2 bb;
+	bb [ 0 ] = bbMin;
+	bb [ 1 ] = uint2( bbMax.x, bbMin.y );
+	bb [ 2 ] = uint2( bbMin.x, bbMax.y );
+	bb [ 3 ] = bbMax;
+	
+	// Calculate the offset from top of boundning box to head
+	uint headOffset = uint( floor( lerp( 1, 25, ( float( bbMax.x - bbMin.x ) / MAX_BODY_WIDTH ) ) ) );
+	
+	// Calculate head and torso positions
+	uint2 headPos = uint2( ( bbMin.x + bbMax.x ) / 2, ( bb [ 0 ].y + headOffset ) );
+	uint2 torsoPos = ( ( bbMin + bbMax ) / 2 );
+		
+	// Set the player details
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].headPosition.x, headPos.x, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].headPosition.y, headPos.y, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].bodyPosition.x, torsoPos.x, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].bodyPosition.y, torsoPos.y, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].x, bbMin.x, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].y, bbMin.y, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].x, bbMax.x, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].y, bbMin.y, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].x, bbMin.x, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].y, bbMax.y, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].x, bbMax.x, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].y, bbMax.y, DUMMY_UINT );
+	InterlockedAdd( PlayerPositionBuffer [ 0 ].playerCount, 1 );
+}
+
+// This is a helper function if only 1 hair centroid is detected
+// This will only be ran by thread 0,0
+void SinglePlayerDetected( const uint2 bbMin, const uint2 bbMax )
+{
+	// Create actual bounding box
+	// Manually initialise so we know we are setting the correct values
+	uint4x2 bb;
+	bb [ 0 ] = bbMin;
+	bb [ 1 ] = uint2( bbMax.x, bbMin.y );
+	bb [ 2 ] = uint2( bbMin.x, bbMax.y );
+	bb [ 3 ] = bbMax;
+	
+	// Calculate torso position
+	uint2 torsoPos = ( ( bbMin + bbMax ) / 2 );
+	
+	// Set the player details
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].bodyPosition.x, torsoPos.x, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].bodyPosition.y, torsoPos.y, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].x, bbMin.x, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].y, bbMin.y, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].x, bbMax.x, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].y, bbMin.y, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].x, bbMin.x, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].y, bbMax.y, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].x, bbMax.x, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ 0 ].boundingBox [ 0 ].y, bbMax.y, DUMMY_UINT );
+}
+
+
+
+
+// This uses trig to get the left lowest point based off right lowest point
+void GetHairToFootAngle( const uint2 headPos, const uint2 threadId, const uint index )
+{
+    // Get degress of hair centroid to right lowest outline pixel
+    // We have to get the degrees in order to get the opposite angle from the head
+    // Atan2 returns radians
+    float hcToPixelDegree = degrees( atan2( float( headPos.y - threadId.y ), float( headPos.x - threadId.x ) ) );
     
-    // Dummy value for interlocked operation.
-    volatile uint dummy = 0;
-  
-    // Reset the fill modified flag.
-    InterlockedCompareExchange( fillModified, 0, 1, dummy );
-     
-    // Safety breakout.
-    volatile uint backup = 0;
-  
-    // Connect the outline pixels.  
-    while ( backup < LOOP_SAFETY_BREAKOUT )
-    {            
-        if ( fillModified == 1 )
+    // Set our angle
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].globals.DegHairToRightLow, int( hcToPixelDegree ), DUMMY_UINT );
+    
+    // Set opposite angle
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].globals.DegHairToLeftLow, int( -hcToPixelDegree ), DUMMY_UINT );
+
+    // Set distance
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].globals.distance, int( floor( distance( float2( headPos ), float2( threadId ) ) ) ), DUMMY_UINT );
+    
+    // Set search plane for left side
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].globals.ySearchPlaneLane.x, threadId.y - 4, DUMMY_UINT );
+	InterlockedExchange( PlayerPositionBuffer [ 0 ].globals.ySearchPlaneLane.y, threadId.y + 4, DUMMY_UINT );
+}
+
+// This loops through hair centroid data to get the most right
+// Hair centroid, as we work through them we cancel them out
+uint3 GetFarRightPlayer( const int previousWorked [ MAX_PLAYERS ], bool first = true )
+{
+    // Current centroid
+    uint2 centroidPos = uint2( MIN_UINT, MIN_UINT );
+    
+    // Player index
+    int index = 0;
+    
+    // previous worked flag
+    bool skip = false;
+    
+    // Loop through player centroids
+    [allow_uav_condition]
+    for ( int i = 0; i < int( MAX_PLAYERS ); ++i, skip = false )
+    {
+        if ( !first )
         {
-            break;
-        }
-        else if ( failedThread == 0 && blockThread == 0 )
-        {
-            bool2 fillCurrentPos = bool2( false, false );
-      
-            // Search for a line of the outline color in any direction.       
-            for ( uint i = 0; i < 8; i += 2 )
+            for ( uint n = 0; n < MAX_PLAYERS; ++n )
             {
-                fillCurrentPos.x = ( VerifyPixel( pixelType, localPos, SharedScanMatrix [ MATRIX_TYPE_SCAN ] [ i ] [ 0 ] ) & VerifyPixel( pixelType, localPos, SharedScanMatrix [ MATRIX_TYPE_SCAN ] [ i ] [ 1 ] ) & VerifyPixel( pixelType, localPos, SharedScanMatrix [ MATRIX_TYPE_SCAN ] [ i ] [ 2 ] ) );
-                fillCurrentPos.y = ( VerifyPixel( pixelType, localPos, SharedScanMatrix [ MATRIX_TYPE_SCAN ] [ i + 1 ] [ 0 ] ) & VerifyPixel( pixelType, localPos, SharedScanMatrix [ MATRIX_TYPE_SCAN ] [ i + 1 ] [ 1 ] ) & VerifyPixel( pixelType, localPos, SharedScanMatrix [ MATRIX_TYPE_SCAN ] [ i + 1 ] [ 2 ] ) );
-          
-                if ( fillCurrentPos.x & fillCurrentPos.y )
+                if ( i == previousWorked [ n ] )
                 {
+                    skip = true;
                     break;
                 }
             }
-           
-            // redundant check, but it is needed.
-            if ( fillCurrentPos.x & fillCurrentPos.y )
+            if ( skip )
             {
-                // If there is a line in any direction, fill the current position.
-                WriteGroupMatrix( localPos, PX_OUTLINE );
-                // Set the fill modified flag.
-                InterlockedCompareExchange( fillModified, 0, 1, dummy );
-            }
-            else
-            {
-                InterlockedCompareExchange( fillModified, 1, 0, dummy );
+                continue;
             }
         } 
-        // Iterate backup.
-        ++backup;
-    }    
+        uint2 hairCentroid = PlayerPositionBuffer[ 0 ].players [ i ].headPosition;
+        centroidPos = max( centroidPos, hairCentroid );
+        index = max( index, i );
+    }
+    
+    return uint3( centroidPos, index );
 }
 
 
 
-//// Currently not used.
-//// Needs to be updated if used.
-//inline void RemoveNonSkin( int2 localPos, int pixelType )
-//{
-//    bool isSkin = false;
-  
-//    // Check if the pixel is colored as skin but is not skin.
-//    isSkin = VerifyPixel( pixelType, localPos, ScanOffsets [ 0 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] );
-  
-//    isSkin = isSkin ? isSkin : VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 4 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 7 ] );
-  
-//    isSkin = isSkin ? isSkin : VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 2 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 4 ] );
-  
-//    isSkin = isSkin ? isSkin : VerifyPixel( pixelType, localPos, ScanOffsets [ 5 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 3 ] ) & VerifyPixel( pixelType, localPos, ScanOffsets [ 1 ] );
+// Gets and sets detected player info
+// We use pixel type for thread blocking this way we know all threads 
+// Will be running this function so we can directly incorporate
+// Memory barriers
+void GetSetPlayerDetails( const uint2 threadId, const uint pixelType, const uint2 min, const uint2 max, const uint playerCount )
+{
+
+	
+    // Setup array for previous pplayer index's we already 
+    // Set the data for
+	int previousWorked [ MAX_PLAYERS ];
+	for ( uint j = 0; j < MAX_PLAYERS; ++j )
+	{
+		previousWorked [ j ] = -1;
+	}
+        
+        
+    // Loop through each hair centroid / player
+    [allow_uav_condition]
+	for ( uint i = 0; i < MAX_PLAYERS; ++i )
+	{
+		if ( i >= playerCount )
+		{
+			break;
+		}
+            
+        // Get furthest right hair centroid in global bounding box
+		uint3 player = GetFarRightPlayer( previousWorked, ( i == 0 ) );
+            
+		if ( pixelType == PX_OUTLINE && threadId.x > player.x && threadId.x <= max.x &&
+            threadId.y > player.y && threadId.y <= max.y )
+		{
+            // If this threads pixel cords is between hair centroid
+            // And global bounding box max
+            // Set its coords into global variable
+            // For other threads to use max operation 
+            // So we truly get the very right bottom of the target outline   
+			InterlockedMax( PlayerPositionBuffer [ 0 ].globals.rightLowestPoint.x, threadId.x );
+			InterlockedMax( PlayerPositionBuffer [ 0 ].globals.rightLowestPoint.y, threadId.y );
+		}
+            
+        // Sync for buffer writes
+		AllMemoryBarrier();
+                
+		if ( pixelType == PX_OUTLINE )
+		{
+            // If we are the thread that is the right bottom of the outline                                                                                                                                                                                                                      
+            // We setup some of the bounding box details
+			const uint2 maxRightLow = PlayerPositionBuffer [ 0 ].globals.rightLowestPoint;
+			if ( DetectGrouping( maxRightLow, threadId.xy, 10.0 ) )
+			{
+				InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ player.z ].boundingBox [ 3 ].x, max.x, DUMMY_UINT );
+				InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ player.z ].boundingBox [ 3 ].y, max.y, DUMMY_UINT );
+				InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ player.z ].boundingBox [ 1 ].x, max.x, DUMMY_UINT );
+                // Then we get the left bottom of the target outline
+				GetHairToFootAngle( player.xy, threadId.xy, player.z );
+			}
+		}
+           
+		const int hcToPixelDegree = int( floor( degrees( atan2( float( player.y - threadId.y ), float( player.x - threadId.x ) ) ) ) );
+		const uint2 searchPlane = PlayerPositionBuffer [ 0 ].globals.ySearchPlaneLane;
+		if ( pixelType == PX_OUTLINE && threadId.y >= searchPlane.x && threadId.y <= searchPlane.y )
+		{
+            // If we are in y plan range and within 5 degrees of set angle                             
+			const int hcToPixeldistance = int( floor( distance( float2( player.xy ), float2( threadId ) ) ) );
+			const int rightDistance = PlayerPositionBuffer [ 0 ].globals.distance;
+			const int degToMatch = PlayerPositionBuffer [ 0 ].globals.DegHairToLeftLow;
+			if ( ( abs( degToMatch ) - abs( hcToPixelDegree ) <= 5 ) && ( hcToPixeldistance <= ( rightDistance - 10 ) )
+            && ( hcToPixeldistance >= ( rightDistance + 10 ) ) )
+			{
+                // degree reduction to get closest pixel
+				InterlockedMin( PlayerPositionBuffer [ 0 ].globals.leftReductionDegree, hcToPixelDegree );
+			}
+		}
+
+        // Sync for buffer writes
+		AllMemoryBarrier();
+        
+		int setDegree = PlayerPositionBuffer [ 0 ].globals.leftReductionDegree;
+		if ( pixelType == PX_OUTLINE && ( abs( setDegree - hcToPixelDegree ) >= 1 ) && ( abs( setDegree - hcToPixelDegree ) <= 10 ) )
+		{
+            // If we are the left bottom of the target outline              
+            // Set our pixel coord info, really just for debug
+			InterlockedExchange( PlayerPositionBuffer [ 0 ].globals.leftLowestPoint.x, threadId.x, DUMMY_UINT );
+			InterlockedExchange( PlayerPositionBuffer [ 0 ].globals.leftLowestPoint.y, threadId.y, DUMMY_UINT );
+                 
+            // Set bounding box details
+			InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ player.z ].boundingBox [ 2 ].x, threadId.x, DUMMY_UINT );
+			InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ player.z ].boundingBox [ 2 ].y, threadId.y, DUMMY_UINT );
+			InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ player.z ].boundingBox [ 0 ].x, threadId.x, DUMMY_UINT );
+			uint headOffset = uint( floor( lerp( 1, 25, ( float( threadId.x - PlayerPositionBuffer [ 0 ].globals.rightLowestPoint.x ) / MAX_BODY_WIDTH ) ) ) );
+			InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ player.z ].boundingBox [ 1 ].y, ( player.y + headOffset ), DUMMY_UINT );
+			InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ player.z ].boundingBox [ 0 ].y, ( player.y + headOffset ), DUMMY_UINT );
+            
+			uint4x2 bb = PlayerPositionBuffer [ 0 ].players [ player.z ].boundingBox;
+			uint2 torso = ( bb._m00_m01 + bb._m30_m31 ) / 2;
+			InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ player.z ].bodyPosition.x, torso.x, DUMMY_UINT );
+			InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ player.z ].bodyPosition.y, torso.y, DUMMY_UINT );
+                
+            // Reduce global bounding box to exclude detected target
+			InterlockedMin( PlayerPositionBuffer [ 0 ].scanBoxBB.bbMax.x, threadId.x - 4 );
+		}
+
+        // Add hair centroid index to worked array
+		previousWorked [ player.z ] = player.z;
+	}
+	
+}
+
+
+
+// Create a bounding box around all outline pixels detected
+void CreateBoundingBox( const uint2 threadId, const uint2 localId )
+{
+    
+    // Flag for final merge
+	bool threadUsed = false;
+
+    // Single initialisation of variables
+    // For loops
+	int sbPixelIndex;
+	int sbBitPos;
+	int sbByteIndex;
+    
+    // Top or bottom flag
+	uint topBottom = ( ( threadId.y > SCAN_BOX_MAX.y - ( SCAN_FOV.y / 2 ) ) && ( threadId.y <= SCAN_BOX_MAX.y ) && ( threadId.x == SCAN_BOX_MAX.x ) ) ? BOTTOM_BOX :
+	( ( threadId.y >= SCAN_BOX_MIN.y ) && ( threadId.y <= SCAN_BOX_MAX.y - ( SCAN_FOV.y / 2 ) ) && ( threadId.x == SCAN_BOX_MIN.x ) ) ? TOP_BOX : 0;
+    
+    // Loop indices
+	int start = ( topBottom == BOTTOM_BOX ) ? SCAN_FOV.x - 1 : 0;
+	int end = ( topBottom == BOTTOM_BOX ) ? 0 : SCAN_FOV.x;
+	int step = ( topBottom == BOTTOM_BOX ) ? -1 : 1;
+	
+	// Each thread's intermediate min/max for their row
+	uint2 intermediateMM = ( topBottom  == BOTTOM_BOX ) ? uint2( MIN_UINT, threadId.y ) : uint2( MAX_UINT, threadId.y );
+    
+	if (  topBottom == TOP_BOX || topBottom == BOTTOM_BOX )
+	{
+		// Set our y position
+		intermediateMM.y = threadId.y;		
+		// Loop through the scan box
+        // Top half goes left to right
+        // Bottom half goes right to left
+        [allow_uav_condition]
+		for ( int x = start; ( topBottom == BOTTOM_BOX ) ? x >= end : x < end; x += step )
+		{
+			if ( VerifyScanBoxPixel( uint2( threadId.x + ( ( topBottom == BOTTOM_BOX ) ? -x : x ), threadId.y ), sbPixelIndex, sbBitPos, sbByteIndex, PX_OUTLINE ) )
+			{
+				threadUsed = true;	
+				intermediateMM.x = ( topBottom == BOTTOM_BOX ) ? 
+				max( intermediateMM.x, ( threadId.x - ( start - x ) ) ) :
+				min( intermediateMM.x, ( threadId.x + x ) );
+			}
+		}
+	}
+    
+    // Final min max merge of all threads
+	if ( threadUsed && ( intermediateMM.x != MAX_UINT || intermediateMM.x != MIN_UINT ) )
+	{
+		start = ( topBottom == BOTTOM_BOX ) ? ( SCAN_BOX_MAX.y - ( SCAN_FOV.y / 2 ) ) : SCAN_BOX_MIN.y;
+		end = ( topBottom == BOTTOM_BOX ) ? SCAN_BOX_MAX.y : ( SCAN_BOX_MIN.y + ( ( SCAN_FOV.y / 2 ) ) );
+		step = 1;
+        
+        [allow_uav_condition]
+		for ( int y = start; y < end; y += step )
+		{
+			if ( threadId.y == ( ( uint ) y ) )
+			{
+				if ( topBottom == BOTTOM_BOX )
+				{
+					InterlockedMax( PlayerPositionBuffer [ 0 ].scanBoxBB.bbMax.y, intermediateMM.y );
+					InterlockedMax( PlayerPositionBuffer [ 0 ].scanBoxBB.bbMax.x, intermediateMM.x );
+				}
+				else
+				{
+					InterlockedMin( PlayerPositionBuffer [ 0 ].scanBoxBB.bbMin.y, intermediateMM.y );
+					InterlockedMin( PlayerPositionBuffer [ 0 ].scanBoxBB.bbMin.x, intermediateMM.x );
+				}
+			}
+		}
+	}
+}
+
+
+// This function is used to merge all the hair centroids In group memory
+// It will be ran by thread 0,0
+inline void FinalMerge()
+{
+    // Player position buffer write index
+	uint writeIdx = 0;
+    // Value to track added players
+	uint addedPlayers = 0;
      
-//    if ( !isSkin )
-//    {
-//        localSharedMatrix [ localPos.x ] [ localPos.y ] = PX_BACKGROUND;
-//    }
-//}
+    [allow_uav_condition]
+	for ( uint i = 0; i < MAX_PLAYERS; ++i )
+	{
+		if ( i >= gmValidCount )
+		{
+			break;
+		}
+        
+        
+        [allow_uav_condition]   
+		for ( uint j = i + 1; j < MAX_PLAYERS; ++j )
+		{
+			if ( j >= gmValidCount )
+			{
+				break;
+			}
+                    
+            // If we find non mergeable hair centroid
+            // We assume its a different player
+			if ( !gmMergedClusters [ i ].CheckForMerge( gmMergedClusters [ j ].outlinePos ) )
+			{
+                // Add the current centroid to the player position buffer
+				uint2 headPos = uint2(
+                ( gmMergedClusters [ i ].outlinePos.x + gmMergedClusters [ i ].outlinePos.z ) / 2,
+                ( gmMergedClusters [ i ].outlinePos.w + gmMergedClusters [ i ].outlinePos.y ) / 2 );
+				
+                if ( all( headPos ) && addedPlayers < ( MAX_PLAYERS - 1 ) )
+				{
+					InterlockedAdd( PlayerPositionBuffer [ 0 ].playerCount, 1, writeIdx );
+					InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ writeIdx ].headPosition.x, headPos.x, DUMMY_UINT );
+					InterlockedExchange( PlayerPositionBuffer [ 0 ].players [ writeIdx ].headPosition.y, headPos.y, DUMMY_UINT );
+					++addedPlayers;
+				}
+                
+                // Push outter index to new cluster
+                // Minus 1 because it will increment at the end of the loop
+				i = j - 1;
+				break;
+			}
+		}
+	}
+}
 
 
-
-// Flood fill the body of the character.
-void FloodFillBody( const uint2 localPos, const uint pixelType, uint failedThread )
+// This function is used to merge all the hair centroids
+void MergeGroupHairCentroids( const uint2 localId )
 {
-    uint blockThread = 0;
-    // If the current pixel is hair or outline, return.
-    if ( VerifyPixel( PX_HAIR, localPos, 0 ) || VerifyPixel( PX_OUTLINE, localPos, 0 ) )
-    {
-        blockThread = 1;
-    }
+    // Local variables
+	HairCentroid current;
+    // Flags for target checks
+	bool3 targetChecks = bool3( false, false, false );
+    // Write index for player position buffer
+	uint writeIdx = 0;
+	// Inner loop index
+	uint j = 0;
+    	
+
+    // Calculate indices range
+	uint indicesPerThread = ( ACTUAL_SCAN_GROUPS + THREAD_GROUP_SIZE - 1 ) / THREAD_GROUP_SIZE;
+	uint threadIndex = localId.x + localId.y * X_THREADGROUP;
+	// Calculate start and end indices
+    uint startIdx = threadIndex * indicesPerThread;
+	uint endIdx = ( threadIndex == THREAD_GROUP_SIZE - 1 ) ? ACTUAL_SCAN_GROUPS : min( startIdx + indicesPerThread, ACTUAL_SCAN_GROUPS );
     
-    // Dummy value for Interlocked operation.
-    volatile uint dummy = 0;
-  
-    // Reset the fill modified flag.
-    InterlockedCompareExchange( fillModified, 0, 1, dummy );
-  
-    // Safety breakout.
-    volatile uint backup = 0;
-  
-    // Fill the body of the character.
-  
-    while ( backup < LOOP_SAFETY_BREAKOUT )
+    
+    [allow_uav_condition]
+	for ( uint i = startIdx; i < endIdx; ++i )
+	{        
+		if ( GroupDataBuffer [ i ].CheckForClusters() )
+		{
+			current = GroupDataBuffer [ i ].hairCentroid;
+			if ( current.VerifyCentroid() )
+			{
+				targetChecks.y = true;
+					
+				[allow_uav_condition]
+				for ( j = i + 1; j < endIdx; ++j )
+				{
+                 
+					if ( !GroupDataBuffer [ j ].CheckForClusters() ||
+                    !GroupDataBuffer [ j ].hairCentroid.VerifyCentroid() )
+					{
+						continue;
+					}
+					else if ( !current.CheckForMerge( GroupDataBuffer [ j ].hairCentroid.outlinePos ) )
+					{
+						targetChecks.x = true;
+                        // Move index to new cluster
+                        // We minus 1 to account for the increment at the end of the loop
+						i = j - 1;
+						break;
+					}
+						
+				}
+                
+                // If we get to the end of the buffer chunk
+                // With no matches we add the current centroid to the group
+                // This also means we are done as there are no more centroids to merge
+				if ( j >= endIdx )
+				{
+					targetChecks.z = true;
+					targetChecks.x = true;
+				}
+			}
+            
+			if ( all( targetChecks.xy == bool2( true, true ) ) && gmValidCount < ( MAX_PLAYERS - 1 ) )
+			{
+				InterlockedAdd( gmValidCount, 1, writeIdx );
+				if ( writeIdx < MAX_PLAYERS )
+				{
+					InterlockedExchange( gmMergedClusters [ writeIdx ].outlinePos.x, current.outlinePos.x, DUMMY_UINT );
+					InterlockedExchange( gmMergedClusters [ writeIdx ].outlinePos.y, current.outlinePos.y, DUMMY_UINT );
+					InterlockedExchange( gmMergedClusters [ writeIdx ].outlinePos.z, current.outlinePos.z, DUMMY_UINT );
+					InterlockedExchange( gmMergedClusters [ writeIdx ].outlinePos.w, current.outlinePos.w, DUMMY_UINT );
+					InterlockedExchange( gmMergedClusters [ writeIdx ].clusterSize, current.clusterSize, DUMMY_UINT );
+					InterlockedExchange( gmMergedClusters [ writeIdx ].allowance, current.allowance, DUMMY_UINT );
+				}
+                
+                // Break out of main loop
+                // If the early exit flag is set
+				if ( targetChecks.z )
+				{
+					break;
+				}
+                // Else we reset the target checks
+                // And continue the loop
+				targetChecks = bool3( false, false, false );
+			}
+		}
+	}
+}
+
+
+
+
+// This function is used by hair threads to search for outline pixels
+// If we find all 3 outline pixels we increment the cluster size
+// Add our position to the group cluster info
+// And set the min max outline locations
+void OutlineSearch( const uint2 threadId, const uint2 localId )
+{
+    // For checking if we have all 3 outline pixels
+	uint result = 0;
+    
+    // Single initialisation of variables
+    // Used in the loops
+	int sbPixelIndex;
+	int sbBitPos;
+	int sbByteIndex;
+    
+    // Outline locations
+    // Used to get the width and top of the outline( for the head )
+	uint3 outlineLocs = uint3( 0, 0, 0 );
+    
+    // Scan left
+    [allow_uav_condition]
+	for ( int i = 0; i < ( ( int ) MAX_SCAN_BOX_SIDE ); ++i )
+	{
+		if ( i >= int( threadId.x - SCAN_BOX_MIN.x ) )
+		{
+			break;
+		}
+        
+            
+		if ( VerifyScanBoxPixel( uint2( threadId.x - i, threadId.y ), sbPixelIndex, sbBitPos, sbByteIndex, PX_OUTLINE ) )
+		{
+			++result;
+			outlineLocs.x = threadId.x - i;
+			break;
+		}
+	}
+    
+	if ( result == 0 )
+	{
+		return;
+	}
+
+    
+    // Scan right
+    [allow_uav_condition]
+	for ( int j = 0; j < ( ( int ) MAX_SCAN_BOX_SIDE ); ++j )
+	{
+		if ( j >= int( SCAN_BOX_MAX.x - threadId.x ) )
+		{
+			break;
+		}
+		
+		if ( VerifyScanBoxPixel( uint2( threadId.x + j, threadId.y ), sbPixelIndex, sbBitPos, sbByteIndex, PX_OUTLINE ) )
+		{
+			++result;
+			outlineLocs.z = threadId.x + j;
+			break;
+		}
+	}
+    
+	if ( result < 2 )
+	{
+		return;
+	}
+    
+    // Scan up
+    [allow_uav_condition]
+	for ( int k = 0; k < ( ( int ) MAX_SCAN_BOX_SIDE ); ++k )
+	{
+		if ( k >= int( threadId.y - SCAN_BOX_MIN.y ) )
+		{
+			break;
+		}
+        
+		if ( VerifyScanBoxPixel( uint2( threadId.x, threadId.y - k ), sbPixelIndex, sbBitPos, sbByteIndex, PX_OUTLINE ) )
+		{
+			++result;
+			outlineLocs.y = threadId.y - k;
+			break;
+		}
+	}
+    
+
+    // If we have all 3 outline pixels
+	if ( result == 3 && ( threadId.y - outlineLocs.y ) < ( MAX_HEAD_SIZE << 1 ) )
+	{
+		InterlockedAdd( gmHairCluster.clusterSize, 1 );
+        // Min max outline locations
+		InterlockedMin( gmHairCluster.outlinePos.y, outlineLocs.y );
+		InterlockedMin( gmHairCluster.outlinePos.x, outlineLocs.x );
+		InterlockedMax( gmHairCluster.outlinePos.z, outlineLocs.z );
+		InterlockedMax( gmHairCluster.outlinePos.w, threadId.y );
+	}
+}
+
+
+
+
+
+// Check if the pixel is within the range of any of the color ranges
+// If it is we set the swap color and set the pixel classification
+// Has a alignment check to make sure the buffer is aligned
+// If not we abort the shader
+uint CheckPixelColor( const uint2 localId, const unorm float4 pixelColor, const uint4 rangeName, inout unorm float4 swapColor )
+{
+    // Pixel classification
+    uint pixelType = 0;
+        
+    // Range loop variable
+    volatile uint colorIndex = 0;
+    
+    // Color tolerance loop variable 
+    volatile uint rangeIndex = 0;
+    
+    [allow_uav_condition]
+    while ( colorIndex < NUM_COLOR_RANGES )
     {
-        if ( fillModified == 1 )
+		const ColorRanges color = ColorRangeBuffer.Load( colorIndex );
+        if ( color.CheckNull() )
         {
-            break;
-        }
-        else if ( failedThread == 0 && blockThread == 0 )
+            pixelType = NULL_RANGE_ERROR;
+        } else if ( !color.CheckAlignment() )
         {
-            bool isBody = false;
-              
-            for ( uint i = 0; i < 7; i++ )
+			pixelType = ALIGNMENT_ERROR;
+		}        
+        // Make sure we are accessing the correct range
+        else if ( CompareNames( color.colorName, rangeName ) )
+        {
+            // Make sure there is tolerances
+            if ( !color.HasRanges())
             {
-                // Check if the pixel is a body pixel.
-                isBody = ( VerifyPixel( pixelType, localPos, SharedScanMatrix [ MATRIX_TYPE_FILL0 ] [ i ] [ 0 ] ) & VerifyPixel( pixelType, localPos, SharedScanMatrix [ MATRIX_TYPE_FILL0 ] [ i ] [ 1 ] ) & VerifyPixel( pixelType, localPos, SharedScanMatrix [ MATRIX_TYPE_FILL0 ] [ i ] [ 2 ] ) );
-                      
-                // This checks if we are next to other body pixels, if we are we are a body pixel.
-                if ( isBody || i < 5 && ( VerifyPixel( PX_FLOODFILL, localPos, SharedScanMatrix [ MATRIX_TYPE_FILL1 ] [ i ] [ 0 ] ) & VerifyPixel( PX_FLOODFILL, localPos, SharedScanMatrix [ MATRIX_TYPE_FILL1 ] [ i ] [ 1 ] ) ) )
-                {
-                    break;
-                }
-            }
-          
-            if ( isBody )
-            {
-                // Modify the pixel if it is a body pixel.
-                WriteGroupMatrix( localPos, PX_FLOODFILL );
-                // Set the flood fill modified flag.
-                InterlockedCompareExchange( fillModified, 0, 1, dummy );
+                pixelType = NO_RANGE_ERROR;
             }
             else
-            {
-                // Set the flood fill modified flag to false.
-                InterlockedCompareExchange( fillModified, 1, 0, dummy );
-            }
-        }
-        // Iterate backup.
-        ++backup;
-    }    
-}
-
-
-
-// Blend any pixels that are colored as hair but not hair to the background color.
-void RemoveNonHair( const uint2 localPos, const uint pixelType, uint failedThread )
-{
-    uint blockThread = 0;
-    // If the curret pixel isnt hair, return.  
-    if ( !VerifyPixel( PX_HAIR, localPos, 0 ) )
-    {
-        blockThread = 1;
-    }
-    
-    // Dummy value for Interlocked operation.
-    volatile uint dummy = 0;
-  
-    // Reset the fill modified flag.
-    InterlockedCompareExchange( fillModified, 0, 1, dummy );
-       
-  
-    // Safety breakout.
-    volatile uint backup = 0;
-  
-    while ( backup < LOOP_SAFETY_BREAKOUT )
-    {
-        if ( fillModified == 1 )
-        {
-            break;
-        }
-        else if ( failedThread == 0 && blockThread == 0 )
-        {
-            bool isHair = false;
-            // Check if the pixel is colored as hair but is not hair.     
-            for ( uint i = 0; i < 5; i++ )
-            {
-                if ( isHair = ( VerifyPixel( pixelType, localPos, SharedScanMatrix [ MATRIX_TYPE_SCAN ] [ i ] [ 0 ] ) & VerifyPixel( pixelType, localPos, SharedScanMatrix [ MATRIX_TYPE_SCAN ] [ i ] [ 1 ] ) & VerifyPixel( pixelType, localPos, SharedScanMatrix [ MATRIX_TYPE_SCAN ] [ i ] [ 2 ] ) ) == true )
+            {    
+                [allow_uav_condition]
+				while ( rangeIndex <  MAX_RANGE_SIZE )
                 {
-                    break;
-                }
-            }
-  
-            // If the pixel is not hair, set it to the background color.        
-            if ( isHair )
-            {
-                // Set the flood fill modified flag to false.
-                InterlockedCompareExchange( fillModified, 1, 0, dummy );
-            }
-            else
-            {
-                WriteGroupMatrix( localPos, PX_BACKGROUND );
-                // Set the flood fill modified flag.
-                InterlockedCompareExchange( fillModified, 0, 1, dummy );
-            }
-        }
-        // Iterate backup.
-        ++backup;
-    }    
-}
-
-
-void CheckAndSetHairCluster( const uint2 hairPos )
-{
-    // Interlocked operation dummy value.
-    uint dummy = 0;
-    // If there are no hair clusters, add a new hair cluster.
-    // A quick early out.
-    if ( hairClusterCount == 0 )
-    {
-        InterlockedAdd( hairClusterCount, 1 );
-        InterlockedAdd( hairClusters [ 0 ].clusterSize, 1 );
-        ATOMIC_EXCHANGE_UINT2( hairClusters [ 0 ].positions[ 0 ], hairPos, dummy );
-        ATOMIC_EXCHANGE_UINT2( hairClusters [ 0 ].averagePos, hairPos, dummy );
-    }
-    else
-    {
-        // Check if the hair position is within the threshold of any of the hair clusters.
-        volatile uint hairGroupable = 0;      
-        for ( uint i = 0; i < MAX_PLAYERS & i < hairClusterCount; i++ )
-        {
-            const uint2 avgPos = hairClusters [ i ].GetAveragePos();
-            hairGroupable = DetectGrouping( avgPos, hairPos, HAIR_CLUSTER_THRESHOLD );
-            
-            uint currentSize = hairClusters [ i ].clusterSize;
-            
-            // If the hair position is within the threshold of the hair cluster, add the hair position to the cluster.     
-            if ( hairGroupable == 1 && !hairClusters [ i ].IsMerged() || currentSize < THREAD_GROUP_SIZE )
-            {               
-                uint2 newAvg = hairClusters [ i ].GetAveragePos();
-                currentSize++;
-                newAvg = ( ( newAvg * currentSize ) + hairPos ) / currentSize;
-                ATOMIC_EXCHANGE_UINT2( hairClusters [ i ].averagePos, newAvg, dummy );
-                ATOMIC_EXCHANGE_UINT2( hairClusters [ i ].positions [ currentSize ], hairPos, dummy );
-                break;
-            }
-        }
-    
-        // If the hair position is not within the threshold of any of the hair clusters, add a new hair cluster. 
-        if ( hairGroupable == 0 && hairClusterCount < ( MAX_PLAYERS - 1 ) )
-        {
-            uint currentHairClusterCount = 0;
-            InterlockedAdd( hairClusterCount, 1, currentHairClusterCount );
-            ++currentHairClusterCount;
-              
-            // Add new hair cluster.
-            ATOMIC_EXCHANGE_UINT2( hairClusters [ currentHairClusterCount ].positions [ 0 ], hairPos, dummy );
-            ATOMIC_EXCHANGE_UINT2( hairClusters [ currentHairClusterCount ].averagePos, hairPos, dummy );
-        }
-    }  
-}
-
-
-
-// Merge hair clusters that are within the threshold of each other.
-// This is very computationally expensive, so we only do it if there is more than 2 hair clusters.
-void MergeHairClusters( const uint2 localPos, const uint failedThread )
-{
-    // Dummy value for Interlocked operation.
-    volatile uint dummy = 0;
-    
-    // Reset the fill modified flag.
-    InterlockedCompareExchange( fillModified, 0, 1, dummy );
-  
-    // Safety breakout.
-    volatile uint backup = 0;
-  
-    // Merge the hair clusters in the current group.    
-    while ( backup < LOOP_SAFETY_BREAKOUT )
-    {       
-        if ( fillModified == 1 )
-        {
-            break;
-        }
-        else if ( failedThread == 0 )
-        {
-            volatile uint y = 1;
-            for ( uint i = 0; y < MAX_PLAYERS & y < hairClusterCount;
-            ++i, y = ( y < MAX_PLAYERS & y < hairClusterCount ) ? ++y : y )
-            {          
-                if ( hairClusters [ i ].IsMerged() )
-                {
-                    continue;
-                }
-                else if ( fillModified == 1 )
-                {
-                    break;
-                }         
-                else if ( i == y )//< Redunant check
-                {
-                    continue;
-                }
-                else if ( !hairClusters [ y ].IsMerged() && !hairClusters [ i ].IsMerged() &&
-                    PlusMinus( hairClusters [ i ].GetAveragePos(), hairClusters [ y ].GetAveragePos(), HAIR_MERGE_THRESHOLD ) )
-                {
-                   
-                    // Merge the hair clusters.
-                    uint szMergeCluster = hairClusters [ y ].clusterSize;
-                    uint szOurCluster = hairClusters [ i ].clusterSize;
-                    volatile uint szCurrentCluster = szOurCluster + 1;
-                    for ( uint z = 0; z < szMergeCluster; ++i, szOurCluster = ++szCurrentCluster )
+                    if ( rangeIndex >= color.numOfRanges )
                     {
-                        ATOMIC_EXCHANGE_UINT2( hairClusters [ i ].positions [ szCurrentCluster ], hairClusters [ y ].positions [ z ], dummy );
-                        uint2 newAvg = hairClusters [ i ].GetAveragePos();
-                        newAvg = ( ( newAvg * szOurCluster ) + hairClusters [ y ].positions [ z ] ) / szCurrentCluster;
-                        ATOMIC_EXCHANGE_UINT2( hairClusters [ i ].averagePos, newAvg, dummy );
-                        ATOMIC_EXCHANGE_UINT2( hairClusters [ i ].positions [ szCurrentCluster ], hairClusters [ y ].positions [ z ], dummy );
+                        break;
                     }
-                    // Set the fill modified flag to true.
-                    InterlockedCompareExchange( fillModified, 0, 1, dummy );
-                }
-                else
-                {
-                    // Set the fill modified flag to false.
-                    InterlockedCompareExchange( fillModified, 1, 0, dummy );
-                }
-            }
-        }             
-        // Iterate the backup breakout.
-        ++backup;
-    }
-}
-
-
-
-// Check if the pixel is within the range of any of the color ranges.
-// If the pixel is within the range, add the pixel to the detected object buffer and set the pixel to the swap color.
-// We use buffer indexing because if we load the whole color range it flogs the gpu instruction cache.
-// As well as we dont need to load the whole buffer, just the parts we need.
-int CheckAndSetPixel( const uint2 localPos, const float4 pixelColor, const min16uint3 rangeName [ 2 ], out float4 swapColor )
-{
-    // Dummy value for interlocked operation
-    volatile uint dummy = 0;
-      
-    for ( uint i = 0; i < NUM_COLOR_RANGES; i++ )
-    {
-        if ( !ColorRangeBuffer [ i ].CheckAlignment() )
-        {
-            return ALIGNMENT_ERROR;
-        }
-        else if ( !ColorRangeBuffer [ i ].CheckName( rangeName ) || !ColorRangeBuffer [ i ].HasRanges() )
-        {
-            continue;
-        }
-        else
-        {           
-            for ( uint n = 0; n < ColorRangeBuffer [ i ].numOfRanges; n++ )
-            {                    
-                if ( ColorRangeBuffer [ i ].IsInRange( pixelColor, n ) )
-                {
-                    // Set output swap color to the skin swap color .
-                    swapColor = ColorRangeBuffer [ i ].swapColor;
+                    
+                    if ( color.IsInRange( pixelColor, rangeIndex ) )
+                    {
+                        // Set output swap color to the skin swap color
+                        swapColor = color.swapColor;
                          
-                    // return the proper mofifier.
-                    switch ( CompareNames( rangeName ) )
-                    {
-                        case PX_HAIR:
-                            // Set local shared matrix to desired pixel type.
-                            WriteGroupMatrix( localPos, PX_HAIR );
-                            // Set hair position.
-                            CheckAndSetHairCluster( localPos );
-                            return PX_HAIR;
-                            break;
-                        case PX_SKIN:
-                            WriteGroupMatrix( localPos, PX_SKIN );
-                            return PX_SKIN;
-                            break;
-                        case PX_OUTLINE:
-                            WriteGroupMatrix( localPos, PX_OUTLINE );
-                            return PX_OUTLINE;
-                            break;
-                        default:
-                            break;
+                        // Set local shared matrix to desired pixel type                        
+                        switch ( GetPixelClassFromName( color.colorName ) )
+                        {
+                            case PX_HAIR:
+                                pixelType = PX_HAIR;
+                                break;
+                            case PX_OUTLINE:
+                                pixelType = PX_OUTLINE;
+                                break;
+                            default:
+                                pixelType = NO_MATCHING_NAME;
+                                break;
+                        }
                     }
+                    
+                    if ( pixelType != 0 )
+                    {
+                        break;
+                    }
+                    ++rangeIndex;
                 }
-            }            
+            }
         }
+        if ( pixelType != 0 )
+        {
+            break;
+        }
+        ++colorIndex;
     }
+    
+    if ( pixelType != 0 )
+    {
+        return pixelType;
+    }
+    
     return PX_BACKGROUND;
 }
 
 
-// This is a atomic reduction function that will reduce the bounding box of the filled area.
-// this starts the bounding box at the size of the texture.
-// Each time a thread finds a filled pixel it will reduce the bounding box.
-inline void BoundingBoxReductionHelper( const uint2 localPos, uint segmentIndex )
-{
-    uint pixelType = ReadGroupMatrix( localPos );
-    if ( pixelType  == PX_FLOODFILL || pixelType == PX_OUTLINE )
-    {
-        ATOMIC_MAX_UINT2( groupMax [ segmentIndex ], localPos );
-        ATOMIC_MIN_UINT2( groupMax [ segmentIndex ], localPos );
-    }
-}
-
-
-// This will calculate max players worth of bounding boxes, per thread group.
-// in the default case thats 6 bounding boxes.
-void GetBoundingBoxPositions( const uint2 localPos, uint failedThread )
-{
-    // this way is faster than using a loop with 1 thread.
-    if ( localPos.x < MAX_PLAYERS && failedThread == 0 )
-    {
-        // Interlocked operation dummy value.
-        uint dummy = 0;
-        // Set the group min/max be the size of the texture, this is much larger than the actual bounding box.
-        // This way we can reduce the bounding box to the actual size.
-        ATOMIC_EXCHANGE_UINT2( groupMin [ localPos.x ], uint2( WINDOW_SIZE_X, WINDOW_SIZE_Y ), dummy );
-        ATOMIC_EXCHANGE_UINT2( groupMax [ localPos.x ], uint2( 0, 0 ), dummy );
-    }
-
-    // Sync the threads in the group, this way they all see the initialized values.
-    GroupMemoryBarrierWithGroupSync();
-        
-    // Reduce the bounding box to the current detected size.
-    if ( failedThread == 0 )
-    {
-        BoundingBoxReductionHelper( localPos, SegmentCalc( localPos ) );
-    }      
-}
-
-
-// This will merge the bounding boxes of the segments that are within the threshold of each other.
-void BoundingBoxMergeHelper( const uint2 localPos, uint failedThread )
-{
-    // Dummy value for interlocked operation.
-    volatile uint dummy = 0;
-    
-    // Reset the fill modified flag.
-    InterlockedCompareExchange( fillModified, 0, 1, dummy );
  
-    // Safety breakout.
-    volatile uint backup = 0;
-    // Merge flage.
-    uint2 merge2 = uint2( MERGED_FLAG, MERGED_FLAG );
-  
-    // Merge the bounding boxes in the current group.    
-    while ( backup < LOOP_SAFETY_BREAKOUT )
-    {       
-        if ( fillModified == 1 )
-        {
-            break;
-        }
-        else if ( failedThread == 0 )
-        {
-            volatile uint y = 1;
-            for ( uint i = 0; y < MAX_PLAYERS;
-            ++i, y = ( y < MAX_PLAYERS ) ? ++y : y )
-            {
-                if ( IsGroupMerged( groupMin [ i ], groupMax [ i ] ) )
-                {
-                    continue;
-                }
-          
-                if ( i == y ) //< Redundant check.
-                {
-                    continue;
-                }
-                else if ( !IsGroupMerged( groupMin [ y ], groupMax [ y ] ) &&
-                ( PlusMinus( groupMin [ i ].x, groupMax [ y ].x, BB_MERGE_THRESHOLD ) ||
-                PlusMinus( groupMin [ i ].y, groupMax [ y ].y, BB_MERGE_THRESHOLD ) ) )
-                {
-                    // if the bounding boxes are beside each other on X axis, merge them.                   
-                    ATOMIC_MAX_UINT2( groupMax [ i ], groupMax [ y ] );
-                    ATOMIC_MIN_UINT2( groupMax [ i ], groupMax [ y ] );
-                      
-                    // Set the merged flag.
-                    ATOMIC_EXCHANGE_UINT2( groupMin [ y ], merge2, dummy );
-                    ATOMIC_EXCHANGE_UINT2( groupMax [ y ], merge2, dummy );
-                    
-                    // Set the fill modified flag to true.
-                    InterlockedCompareExchange( fillModified, 0, 1, dummy );                   
-                }
-                else
-                {
-                    // Set the fill modified flag to false.
-                    InterlockedCompareExchange( fillModified, 1, 0, dummy );
-                }          
-            }
-        }             
-        // Iterate the backup breakout.
-        ++backup;
-    }    
-}
+//--------------Group-Memory-Funcitons-----------------//
 
-
-void AssignUniqueIds( const uint segmentPos, const uint2 groupId )
+inline void InitGMCentroids( const uint2 localId )
 {
-    uint2 linkedBBC = uint2( 0, 0 );
-    uint hcInBB = 0xF1A5;
-    
-    // Interlocked operation dummy value.
-    volatile uint dummy = 0;
-      
-    for ( uint i = 0; i < MAX_PLAYERS && i < hairClusterCount; i++ )
-    {                   
-        // Check if hair centroid is inside box        
-        if ( BbToHairLink( groupMin [ segmentPos ], groupMax [ segmentPos ], hairClusters [ i ].GetAveragePos() ) )
-        {
-            linkedBBC.x = hcInBB;
-            linkedBBC.y = i;
-        }
-    }
-    
-    uint2 avgPos = uint2( 0, 0 );
-  
-    // If hair Centroid is in bounding box.
-    if ( linkedBBC.x == hcInBB )
-    {
-        uint uId = GenerateUniqueId();
-        // Add the hair centroid and min/max values to goup detail buffer.
-        avgPos = hairClusters [ linkedBBC.y ].GetAveragePos();
-
-        // Setup bounding box.
-        ATOMIC_EXCHANGE_UINT2( GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].min, groupMin [ segmentPos ], dummy );
-        ATOMIC_EXCHANGE_UINT2( GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].max, groupMax [ segmentPos ], dummy );
-        InterlockedExchange( GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].uniqueId, uId, dummy );
-        InterlockedExchange( GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].linked, 1, dummy );
-        // Setup hair centroid.
-        ATOMIC_EXCHANGE_UINT2( GroupDetailsBuffer [ groupId.x ].hairCentroids [ segmentPos ].position, avgPos, dummy );
-        InterlockedExchange( GroupDetailsBuffer [ groupId.x ].hairCentroids [ segmentPos ].linked, 1, dummy );
-        InterlockedExchange( GroupDetailsBuffer [ groupId.x ].hairCentroids [ segmentPos ].uniqueId, dummy, dummy );
-
-    }
-    else
-    {
-        // If there is no hair centroid for box then add box to group detail buffer with global minimum position as unique id.
-        ATOMIC_EXCHANGE_UINT2( GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].min, groupMin [ segmentPos ], dummy );
-        ATOMIC_EXCHANGE_UINT2( GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].max, groupMax [ segmentPos ], dummy );
-        InterlockedExchange( GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].linked, 0, dummy ); // Make sure linked is 0.
-        InterlockedExchange( GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].uniqueId, GlobalPosToUID( GroupPosToGlobal( groupMin [ segmentPos ], groupId ) ), dummy );
-        
-        // Add a hair centroid to group details
-        if ( segmentPos < hairClusterCount)
-        {
-            avgPos = hairClusters [ segmentPos ].GetAveragePos();
-            ATOMIC_EXCHANGE_UINT2( GroupDetailsBuffer [ groupId.x ].hairCentroids [ segmentPos ].position, avgPos, dummy );
-            InterlockedExchange( GroupDetailsBuffer [ groupId.x ].hairCentroids [ segmentPos ].linked, 0, dummy ); // Make sure linked is 0.
-            InterlockedExchange( GroupDetailsBuffer [ groupId.x ].hairCentroids [ segmentPos ].uniqueId, GlobalPosToUID( GroupPosToGlobal( hairClusters [ linkedBBC.y ].GetAveragePos(), groupId ) ), dummy );
-        }
-    }
+	
+	InterlockedExchange( gmMergedClusters [ localId.x ].outlinePos.x, 0, DUMMY_UINT );
+	InterlockedExchange( gmMergedClusters [ localId.x ].outlinePos.y, 0, DUMMY_UINT );
+	InterlockedExchange( gmMergedClusters [ localId.x ].outlinePos.z, 0, DUMMY_UINT );
+	InterlockedExchange( gmMergedClusters [ localId.x ].outlinePos.w, 0, DUMMY_UINT );
+	InterlockedExchange( gmMergedClusters [ localId.x ].clusterSize, 0, DUMMY_UINT );
+	InterlockedExchange( gmMergedClusters [ localId.x ].allowance, 0, DUMMY_UINT );
+	if ( IsTargetGroupThread( localId, uint2( 0, 0 ) ) )
+	{
+		InterlockedExchange( gmValidCount, 0, DUMMY_UINT );
+	}
 }
 
-
-// Look at the local matrix and get the details for the global matrix.
-// The swap color input will only be valid if the pixel type is hair, outline or skin.
-// Otherwise the flood fill and background colors are global.
-// Im hoping to only use this for debugging
-inline void GetAndSetDetailsForGlobal( const uint2 localPos, const uint2 globalPos, const unorm float4 swapColor,  uint failedThread )
-{    
-    if ( failedThread == 0 && any( swapColor ) )
-    {
-        UavBuffer [ globalPos ] = swapColor;
-    }
-    else if ( failedThread == 0 )
-    {
-        UavBuffer [ globalPos ] = ReadGroupMatrix( localPos ) == PX_FLOODFILL ? OBJECT_FILL_COLOR : BACKGROUND_PIXEL_COLOR;
-    }
-  
-    // Sync everything.
-    AllMemoryBarrierWithGroupSync();
-}
-
-
-// Merges bounding boxes from all thread groups.
-// Keeping interlocked operations only to help keep all variables most recent values as visible as possible to all threads.
-void MergeGlobalDetails( const uint segmentPos, const uint2 groupId, uint failedThread )
-{  
-    // Dummy value for interlocked operation.
-    volatile uint dummy = 0;
-    // Safety breakout.
-    volatile uint backup = 0;
-    // Merge flag.
-    uint2 merge2 = uint2( MERGED_FLAG, MERGED_FLAG );
-    
-    // Reset the fill modified flag.
-    InterlockedCompareExchange( PlayerPositionBuffer [ 1 ].GLOBAL_MERGE_FLAG, 0, 1, dummy );
-        
-    while ( backup < LOOP_SAFETY_BREAKOUT ) 
-    {                    
-        if ( PlayerPositionBuffer [ 1 ].GLOBAL_MERGE_FLAG == 1 )
-        {
-            break;
-        }
-        else if ( failedThread == 0 && segmentPos < MAX_PLAYERS && !GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].IsMerged() && 
-            !GroupDetailsBuffer [ groupId.x ].hairCentroids [ segmentPos ].IsMerged() )
-        {
-            volatile uint otherSegmentPos = 0;
-            for ( uint i = 0; i < NUM_GROUPS; i++, otherSegmentPos = 0 )
-            {
-                if ( i == groupId.x )
-                {
-                    continue;
-                }
-                else
-                {
-                    BoundingBox boundingBoxes [ MAX_PLAYERS ];
-                    HairCentroid hairCentroids [ MAX_PLAYERS ];
-                    HairCentroid ourThreadsHairCentroid = HairCentroidCTOR( uint2( 0, 0 ), 0, 0 );
-              
-                    // Get other groups details.
-                    GroupDetailsBuffer [ i ].GetAllGroupDetails( boundingBoxes, hairCentroids );
-              
-                    // Get this threads hair centroid.
-                    GroupDetailsBuffer [ groupId.x ].GetHairCentroid( segmentPos, ourThreadsHairCentroid );
-              
-                    
-                    while ( otherSegmentPos < MAX_PLAYERS )
-                    {
-                        if ( !hairCentroids [ otherSegmentPos ].IsMerged() && PlusMinus( hairCentroids [ otherSegmentPos ].position, ourThreadsHairCentroid.position, HAIR_MERGE_THRESHOLD ) && hairCentroids [ otherSegmentPos ].isLinked() )
-                        {
-                            // Average the 2 positions.
-                            ourThreadsHairCentroid.position += hairCentroids [ otherSegmentPos ].position;
-                            ourThreadsHairCentroid.position >>= 1;
-                          
-                            // Exchange the new postion.
-                            ATOMIC_EXCHANGE_UINT2( GroupDetailsBuffer [ groupId.x ].hairCentroids [segmentPos].position, ourThreadsHairCentroid.position, dummy );                                                                          
-                            
-                            // Merge bounding boxes.
-                            ATOMIC_MIN_UINT2( GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].min, boundingBoxes [ otherSegmentPos ].min );
-                            ATOMIC_MAX_UINT2( GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].max, boundingBoxes [ otherSegmentPos ].max );
-                      
-                            // Set merge flag for both.
-                            InterlockedExchange( GroupDetailsBuffer [ i ].hairCentroids [ otherSegmentPos].uniqueId,  MERGED_FLAG, dummy );
-                            InterlockedExchange( GroupDetailsBuffer [ i ].boundingBoxes [ otherSegmentPos ].uniqueId, MERGED_FLAG, dummy );
-                            // Unlink just because.
-                            InterlockedCompareExchange( GroupDetailsBuffer [ i ].hairCentroids [ otherSegmentPos ].linked, 1, 0, dummy );
-                            InterlockedCompareExchange( GroupDetailsBuffer [ i ].boundingBoxes [ otherSegmentPos ].linked, 1, 0, dummy );
-                            
-                            // Make sure flag stays true.
-                            InterlockedCompareExchange( PlayerPositionBuffer [ 1 ].GLOBAL_MERGE_FLAG, 0, 1, dummy );
-                        }
-                        else if ( !hairCentroids [ otherSegmentPos ].IsMerged() && !boundingBoxes [ otherSegmentPos ].isLinked() &&
-                        ( PlusMinus( boundingBoxes [ otherSegmentPos ].min.y, GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].max.y, BB_MERGE_THRESHOLD ) ||
-                        PlusMinus( boundingBoxes [ otherSegmentPos ].min.x, GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].max.x, BB_MERGE_THRESHOLD ) ||
-                        PlusMinus( boundingBoxes [ otherSegmentPos ].max.y, GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].min.y, BB_MERGE_THRESHOLD ) ||
-                        PlusMinus( boundingBoxes [ otherSegmentPos ].max.x, GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].min.x, BB_MERGE_THRESHOLD ) ) )
-                        {
-                            // Merge bounding boxs.
-                            ATOMIC_MIN_UINT2( GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].min, boundingBoxes [ otherSegmentPos ].min );
-                            ATOMIC_MAX_UINT2( GroupDetailsBuffer [ groupId.x ].boundingBoxes [ segmentPos ].max, boundingBoxes [ otherSegmentPos ].max );
-                                              
-                            // Set merge flag for both.
-                            InterlockedExchange( GroupDetailsBuffer [ i ].hairCentroids [ otherSegmentPos ].uniqueId, MERGED_FLAG, dummy );
-                            InterlockedExchange( GroupDetailsBuffer [ i ].boundingBoxes [ otherSegmentPos ].uniqueId, MERGED_FLAG, dummy );
-                            // Unlink just because.
-                            InterlockedCompareExchange( GroupDetailsBuffer [ i ].hairCentroids [ otherSegmentPos ].linked, 1, 0, dummy );
-                            InterlockedCompareExchange( GroupDetailsBuffer [ i ].boundingBoxes [ otherSegmentPos ].linked, 1, 0, dummy );
-                                                                                          
-                            // Make sure flag stays true.
-                            InterlockedCompareExchange( PlayerPositionBuffer [ 1 ].GLOBAL_MERGE_FLAG, 0, 1, dummy );                            
-                        }
-                        else
-                        {
-                            // Set flag to false
-                            InterlockedCompareExchange( PlayerPositionBuffer [ 1 ].GLOBAL_MERGE_FLAG, 1, 0, dummy );
-                        }                         
-                        // Iterate other segment postion
-                        otherSegmentPos++;
-                    }
-                }
-            }
-        }
-        // Iterate the backup breakout.
-        ++backup;
-    }    
-}
-
-
-
-// This will merge the potential 6 bounding boxes into 1 bounding box.
-// Get the locations of the average hair position(s).
-// Add the details to the group details buffer.
-void SetGroupDetails( const uint2 localPos, const uint2 groupId, const uint2 globalPos, const unorm float4 swapColor, uint failedThread )
+// This function atomically initializes the group hair cluster
+inline void InitGmHairCluster()
 {
-    // Add all bounding boxes to the group details uav buffer.
-    // This also assigns unique id's to mathching boxes and hair centroids.
-    // Else it uses the global position of the min x/y as the unique id.
-    const uint segmentPos = SegmentPosCalc( localPos );
-  
-    if ( failedThread == 0 && segmentPos < MAX_PLAYERS )
-    {
-        AssignUniqueIds( segmentPos, groupId );
-    }
-  
-    // Sync all threads.
-    AllMemoryBarrierWithGroupSync();
-  
-#ifdef DEBUG
-    // Update texture with all edited details.
-    GetAndSetDetailsForGlobal( localPos, globalPos, swapColor, failedThread );
-#endif             
-  
-    // Merge the group buffer details.
-    MergeGlobalDetails( segmentPos, groupId, failedThread );
+	InterlockedExchange( gmHairCluster.outlinePos.x, MAX_UINT, DUMMY_UINT );
+	InterlockedExchange( gmHairCluster.outlinePos.y, MAX_UINT, DUMMY_UINT );
+	InterlockedExchange( gmHairCluster.outlinePos.z, MIN_UINT, DUMMY_UINT );
+	InterlockedExchange( gmHairCluster.outlinePos.w, MIN_UINT, DUMMY_UINT );
+	InterlockedExchange( gmHairCluster.clusterSize, 0, DUMMY_UINT );
 }
 
+// This function is used to check the group status atomically
+// If the status is an error we will set the threads status to error
+inline void CheckGroupStatus( inout uint status )
+{
+	uint gmStatus = gmGroupStatus;
+	if ( gmStatus != STATUS_OK )
+	{
+		status = gmStatus;
+	}
+}
 
-// Draws bounding box on texture 3 pixels wide. 
-inline void DrawBoundingBox( const uint2 globalPos )
-{ 
-    for ( uint i = 0; i < MAX_PLAYERS; i++ )
-    {
-        UavBuffer [ globalPos ] = IsPixelBoundingBox( globalPos, PlayerPositionBuffer [ 0 ].players [ i ].boundingBox ) ? BOUNDING_BOX_COLOR: UavBuffer[ globalPos ];
-    }
+inline void SetGroupStatus( const uint status )
+{
+	InterlockedExchange( gmGroupStatus, status, DUMMY_UINT );
 }

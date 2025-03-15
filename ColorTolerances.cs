@@ -286,7 +286,7 @@
         /// <summary>
         /// Stores a list of color tolerances for various character features.
         /// </summary>
-        internal List<ToleranceBase> CharacterFeatures { get; private set; }
+        internal List<ToleranceBase> CharacterFeatures { get; }
 
         /// <summary>
         /// List of all swap colors used for highlighting or other visual effects.
@@ -301,6 +301,8 @@
         /// </summary>
         internal ColorToleranceManager()
         {
+            // instantiate character features
+            CharacterFeatures = [];
             // Set up color tolerances for character outlines, features, and outfits
             if ( !InitOutlines() || !InitCharacterFeatures() )
             {
@@ -372,6 +374,8 @@
 
         /// <summary>
         /// Initializes color tolerances for character outlines.
+        /// We have a custom slot but realistically we would need a really solid algorithm,
+        /// To determine the proper color thresholds for it, just part of the POC
         /// </summary>
         /// <returns>True if initialization is successful; otherwise, false.</returns>
         private bool InitOutlines()
@@ -380,12 +384,12 @@
             // Define color tolerances for various outline colors
             CharacterOutlines = new ToleranceBase( new Dictionary<string, List<ColorTolerance>>
             {
-                { "orange", new List<ColorTolerance> { new( 243, 255, 138, 246, 73, 110 ) } },
-                { "red", new List<ColorTolerance> { new( 245, 255, 98, 132, 78, 137 ) } },
-                { "green", new List<ColorTolerance> { new( 28, 112, 238, 255, 28, 100 ) } },
-                { "cyan", new List<ColorTolerance> { new( 58, 112, 228, 255, 228, 255 ) } },
-                { "yellow", new List<ColorTolerance> { new( 235, 255, 235, 255, 76, 135 ) } },
-                { "purple", new List<ColorTolerance> { new( 192, 255, 58, 102, 142, 255 ) } },
+                { "orange", new List<ColorTolerance> { new( 235, 255, 138, 255, 116, 167 ), new( 230, 255, 178, 255, 70, 111 ), new( 200, 233, 150, 201, 70, 111 ), new( 160, 200, 130, 170, 74, 95 ) } },
+                { "red", new List<ColorTolerance> { new( 238, 255, 90, 130, 80, 135 ), new( 218, 255, 0, 50, 0, 50 ), new( 182, 220, 90, 108, 95, 121 ), new( 170, 211, 0, 40, 0, 40 ), new( 232, 255, 80, 100, 78, 98 ) } },
+                { "green", new List<ColorTolerance> { new( 90, 190, 210, 255, 60, 100 ) } },
+                { "cyan", new List<ColorTolerance> { new( 58, 112, 208, 255, 208, 255 ) } },
+                { "yellow", new List<ColorTolerance> { new( 210, 255, 210, 255, 115, 220 ) } },
+                { "purple", new List<ColorTolerance> { new( 192, 255, 55, 125, 166, 255 ), new( 223, 255, 126, 168, 230, 255 ), new( 238, 255, 45, 65, 238, 255 ), new( 140, 170, 30, 75, 135, 165 ) } },
                 { "custom", new List<ColorTolerance> { new(0,0,0,0,0,0 ) } },
             }, Color.Purple, "orange" );//< We set default color selection to avoid any bugs off rip.
 
@@ -413,67 +417,24 @@
         {
 
             // Define color tolerances for hair colors
-            var Hair = new ColorTolerance[ 9 ]
+            CharacterFeatures.Add( new ToleranceBase( new Dictionary<String, List<ColorTolerance>>
             {
-                new(206, 216, 179, 189, 126, 136),
-                new(69, 79, 76, 86, 88, 98),
-                new(181, 191, 108, 118, 66, 76),
-                new(121, 131, 108, 118, 82, 92),
-                new(91, 101, 51, 61, 28, 38),
-                new(72, 82, 31, 41, 22, 32),
-                new(190, 200, 206, 216, 223, 233),
-                new(105, 115, 174, 184, 132, 142),
-                new(121, 131, 79, 89, 154, 164)
-            };
+                { "gold", new List<ColorTolerance> { new( 220, 240, 190, 208, 129, 146 ), new( 200, 212, 162, 176, 117, 130 ) } },
+                { "orange", new List<ColorTolerance> { new( 190, 210, 96, 120, 45, 68 ) } },
+                { "peach", new List<ColorTolerance> { new( 150, 200, 119, 148, 73, 107 ) } },
+                { "oak", new List<ColorTolerance> { new( 119, 129, 40, 59, 15, 40 ) } },
+                { "brown", new List<ColorTolerance> { new( 70, 86, 35, 45, 40, 45 ), new( 74, 83, 37, 43, 28, 33 ), new( 85, 90, 17, 22, 0, 5 ) } },
+                { "grey", new List<ColorTolerance> { new( 190, 208, 207, 222, 211, 230 ), new( 160, 180, 182, 202, 200, 226 ) } },
+                { "green", new List<ColorTolerance> { new( 80, 112, 132, 165, 90, 130 ) } },
+                { "purple", new List<ColorTolerance> { new( 118, 135, 47, 89, 140, 173 ) } },
+            }, Color.FromArgb( 223, 242, 164 ), "hair" ) );
 
-            // Define color tolerances for skin tones
-            var Skin = new ColorTolerance[ 10 ]
+
+            if ( CharacterFeatures[ 0 ].Count != 8 )
             {
-                new(143, 153, 80, 90, 64, 74),
-                new(140, 150, 84, 94, 61, 71),
-                new(154, 164, 96, 106, 69, 79),
-                new(176, 186, 116, 126, 88, 98),
-                new(187, 197, 122, 132, 88, 98),
-                new(212, 222, 153, 163, 110, 120),
-                new(214, 224, 165, 175, 124, 134),
-                new(204, 214, 146, 156, 124, 134),
-                new(220, 230, 157, 167, 132, 142),
-                new(220, 230, 168, 178, 148, 158)
-            };
-
-            // Initialize CharacterFeatures with distinct swap colors
-            CharacterFeatures =
-            [
-                new( new Dictionary<string, List<ColorTolerance>>
-                {
-                     { "Hair", new List<ColorTolerance>( Hair ) }
-                }, Color.DeepPink, "Hair" ),
-                new( new Dictionary<string, List<ColorTolerance>>
-                {
-                     { "Skin", new List<ColorTolerance>( Skin ) }
-                }, Color.Gold, "Skin" )
-            ];
-
-
-            // Validate the number of elements in CharacterFeatures
-            if ( CharacterFeatures.Count != 2 )
-            {
-                ErrorHandler.HandleException( new Exception( "CharacterFeatures has incorrect number of elements" ) );
+                ErrorHandler.HandleException( new Exception( "Character Hair has incorrect number of elements" ) );
                 return false;
             }
-
-            if ( !CharacterFeatures[ 0 ].ValidateTolerances( Hair.AsEnumerable().ToList() ) )
-            {
-                ErrorHandler.HandleException( new Exception( "CharacterFeatures( Hair ) has incorrect number of elements" ) );
-                return false;
-            }
-
-            if ( !CharacterFeatures[ 1 ].ValidateTolerances( Skin.AsEnumerable().ToList() ) )
-            {
-                ErrorHandler.HandleException( new Exception( "CharacterFeatures( Skin ) has incorrect number of elements" ) );
-                return false;
-            }
-
 #if DEBUG
             Logger.Log( "CharacterFeatures initialized successfully" );
 #endif
@@ -497,7 +458,7 @@
         }
 
 
-        private ColorTolerance CustomColorToleranceGenerator( int red, int green, int blue )
+        private static ColorTolerance CustomColorToleranceGenerator( int red, int green, int blue )
         {
             static (int min, int max) GetToleranceRange( int rgb )
             {

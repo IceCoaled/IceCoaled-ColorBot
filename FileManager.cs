@@ -1,4 +1,4 @@
-﻿namespace SCB
+namespace SCB
 {
     internal class FileManager
     {
@@ -26,9 +26,19 @@
 
         internal const string tessEngineFile = @"./tessdata/eng.traineddata";
 
-        internal const string shaderFile = @"./shaders/GenericShader.hlsl";
+        internal const string firstPassShaderFile = @"./shaders/FirstPass.hlsl";
 
-        internal const string shaderDefineFile = @"./shaders/ShaderDefines.hlsli";
+        internal const string secondPassShaderFile = @"./shaders/SecondPass.hlsl";
+
+        internal const string thirdPassShaderFile = @"./shaders/ThirdPass.hlsl";
+
+        internal const string fourthPassShaderFile = @"./shaders/FourthPass.hlsl";
+
+        internal const string bufferCleanerShaderFile = @"./shaders/BufferCleanerPass.hlsl";
+
+        internal const string debugDrawShaderFile = @"./shaders/DebugDrawPass.hlsl";
+
+        internal const string shaderDefinesFile = @"./shaders/ShaderDefines.hlsli";
 
         internal const string shaderFunctionsFile = @"./shaders/ShaderFunctions.hlsl";
 
@@ -112,7 +122,7 @@
             string? line = "";
 
             using StreamReader reader = new( fileStream );
-            while ( ( line = reader.ReadLine() ) != null )
+            while ( ( line = reader.ReadLine() ) is not null )
             {
                 line = line.Trim();
                 if ( line.StartsWith( "ColorVisionConfig=", StringComparison.Ordinal ) )
@@ -135,7 +145,7 @@
                             string[] rgbValue = { colorVisionCofig[ i ].Split( "OutlineColor=" )[ 1 ].Split( '(' )[ 1 ].Trim(), colorVisionCofig[ i + 1 ].Trim(), colorVisionCofig[ i + 2 ].Trim() };
                             string rgbCheck = rgbValue.Aggregate( ( current, next ) => $"{current},{next}" );
                             colorMap.TryGetValue( rgbCheck, out string? colorName );
-                            if ( colorName != null )
+                            if ( colorName is not null )
                             {
 #if DEBUG
                                 Logger.Log( $"New outline color: {colorName}" );
@@ -148,7 +158,9 @@
                 }
             }
 
-            return ("Unknown", "0,0,0,0"); // Return "Unknown" if no match is found
+            ErrorHandler.HandleException( new InvalidDataException( "Failed to Get enemy outline color" ) );
+            // WIll never get here
+            return ("Unknown", "0,0,0,0");
         }
 
 
@@ -165,7 +177,7 @@
             string? line = "";
 
             using StreamReader reader = new( fileStream );
-            while ( ( line = reader.ReadLine() ) != null )
+            while ( ( line = reader.ReadLine() ) is not null )
             {
                 line = line.Trim();
                 if ( line.StartsWith( "MouseSensitivityADSScale=" ) )
@@ -252,7 +264,7 @@
 
                 // If the generic shader file doesn't exist, download it from the github repo
                 string url = "https://github.com/IceCoaled/IceCoaled-ColorBot/tree/master/GenericShader.hlsl";
-                string path = shaderFile;
+                string path = firstPassShaderFile;
 
                 Task.Run( () => DownloadFile( url, path ) );
 
@@ -313,7 +325,7 @@
                         string gunFile = $"{gunFolder}/{gun}-{i}.txt";
                         string gunFileUrl = $"{url}/{gun}/{gun}-{i}.txt";
 
-                        Task.Run( () => DownloadFile( gunFileUrl, gunFile ) );
+                        Task.Run( async () => await DownloadFile( gunFileUrl, gunFile ) );
 
                         //wait till task is done
                         while ( !File.Exists( gunFile ) )
