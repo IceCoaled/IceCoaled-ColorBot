@@ -45,7 +45,7 @@ namespace SCB.Atomics
         /// <summary>
         /// Basic constructor.
         /// </summary>
-        public AtomicNumericsBase( T inputValue, bool isExtended = false, uint contentionThreshold = uint.MaxValue )
+        public AtomicNumericsBase( T inputValue, bool isExtended, uint contentionThreshold )
         {
             // Check if the type is supported, if not throw an exception
             if ( !IsSupported() )
@@ -59,7 +59,6 @@ namespace SCB.Atomics
             ContentionThreshold = contentionThreshold;
 
             // Setup the atomic storage
-            // Setup the atomic storage
             if ( IsExtended )
             {
                 AllocExtendedAlignedMemory();
@@ -68,13 +67,13 @@ namespace SCB.Atomics
                 StorageEx = ( ( AtomicStorageEx* ) AllocHeader );
 
                 // Check if the atomic storage is not null
-                if ( Unsafe.Read<ulong>( &StorageEx->ulAtomic ) != ulong.MaxValue )
+                if ( Unsafe.Read<long>( &StorageEx->lAtomic ) != long.MaxValue )
                 {
                     throw new InvalidOperationException( "Atomic storage is null" );
                 }
 
                 // Clear the value of the atomic storage
-                Unsafe.Write( &StorageEx->ulAtomic, 0x00000000 );
+                Unsafe.Write( &StorageEx->lAtomic, 0L );
             } else
             {
                 AllocAlignedMemory();
@@ -83,17 +82,17 @@ namespace SCB.Atomics
                 Storage = ( ( AtomicStorage* ) AllocHeader );
 
                 // Check if the atomic storage is not null
-                if ( Unsafe.Read<ulong>( &Storage->ulAtomic ) != ulong.MaxValue )
+                if ( Unsafe.Read<long>( &Storage->ulAtomic ) != long.MaxValue )
                 {
                     throw new InvalidOperationException( "Atomic storage is null" );
                 }
 
                 // Clear the value of the atomic storage
-                Unsafe.Write( &Storage->ulAtomic, 0x00000000 );
+                Unsafe.Write( &Storage->lAtomic, 0L );
             }
         }
 
-        public AtomicNumericsBase( T inputValue, uint contentionThreshold )
+        public AtomicNumericsBase( T inputValue )
         {
             // Check if the type is supported, if not throw an exception
             if ( !IsSupported() )
@@ -102,32 +101,24 @@ namespace SCB.Atomics
             }
 
             // Initialize the contention threshold, and the lock
-            IsExtended = true;
-            ContentionThreshold = contentionThreshold;
+            IsExtended = false;
+            ContentionThreshold = uint.MaxValue;
             HighContentionSyncLock = new System.Threading.Lock();
 
-            // Check if the type is supported, get the IO and U type
-
-            // Setup the atomic storage
-            if ( IsExtended )
-            {
-                AllocExtendedAlignedMemory();
-            } else
-            {
-                AllocAlignedMemory();
-            }
+            AllocAlignedMemory();
 
             // Set the atomic storage to the memory address
             Storage = ( ( AtomicStorage* ) AllocHeader );
 
             // Check if the atomic storage is not null
-            if ( Unsafe.Read<ulong>( &Storage->ulAtomic ) != ulong.MaxValue )
+            if ( Unsafe.Read<long>( &Storage->lAtomic ) != long.MaxValue )
             {
                 throw new InvalidOperationException( "Atomic storage is null" );
             }
 
             // Clear the value of the atomic storage
-            Unsafe.Write( &Storage->ulAtomic, ulong.MinValue );
+            Unsafe.Write( &Storage->lAtomic, 0L );
+
         }
 
         ~AtomicNumericsBase()
@@ -145,12 +136,9 @@ namespace SCB.Atomics
             }
 
             // Initialize the atomic storage
-            var tempStorage = new AtomicStorage
-            {
-                // Set ulong to max value, so we can check if the memory is properly allocated
-                ulAtomic = ulong.MaxValue
-            };
-
+            AtomicStorage tempStorage = new();
+            // Set ulong to max value, so we can check if the memory is properly allocated
+            tempStorage.lAtomic = long.MaxValue;
             // Serialize the atomic storage to the memory address
             Marshal.StructureToPtr( tempStorage, ( ( nint ) AllocHeader ), false );
         }
@@ -163,11 +151,9 @@ namespace SCB.Atomics
                 throw new InvalidOperationException( "Memory allocation failed" );
             }
             // Initialize the atomic storage
-            var tempStorage = new AtomicStorageEx
-            {
-                // Set ulong to max value, so we can check if the memory is properly allocated
-                ulAtomic = ulong.MaxValue
-            };
+            AtomicStorageEx tempStorage = new();
+            // Set ulong to max value, so we can check if the memory is properly allocated
+            tempStorage.lAtomic = long.MaxValue;
             // Serialize the atomic storage to the memory address
             Marshal.StructureToPtr( tempStorage, ( ( nint ) AllocHeader ), false );
         }
@@ -392,22 +378,21 @@ namespace SCB.Atomics
         }
     }
 
-
     /// <summary>
     /// Atomic storage structure for the atomic operations.
     /// This is purposely made to be 16 bytes in size, With a pack of 8 bytes.
     /// This is to ensure 1 we truly have atomic operations on the variable.
     /// 2, to ensure that the variable is properly aligned in memory.
     /// </summary>
-    [StructLayout( LayoutKind.Explicit, Pack = 8, Size = 16 )]
-    public struct AtomicStorage
+    [StructLayout( LayoutKind.Explicit, Pack = 8, Size = 8 )]
+    public struct AtomicStorage()
     {
         [FieldOffset( 0 )]
-        public long lAtomic;
+        public long lAtomic = 0x0000000000000000;
         [FieldOffset( 0 )]
-        public ulong ulAtomic;
+        public ulong ulAtomic = 0x0000000000000000;
         [FieldOffset( 8 )]
-        private readonly ulong padding0;
+        private readonly ulong padding = 0x0000000000000000;
     }
 
     /// <summary>
@@ -415,21 +400,21 @@ namespace SCB.Atomics
     /// It adds the advantage to make the atomic value occupy its own cache line.
     /// </summary>
     [StructLayout( LayoutKind.Explicit, Pack = 8, Size = 64 )]
-    public struct AtomicStorageEx
+    public struct AtomicStorageEx()
     {
-        [FieldOffset( 0 )] private readonly ulong padding0;
-        [FieldOffset( 8 )] private readonly ulong padding1;
-        [FieldOffset( 16 )] private readonly ulong padding2;
+        [FieldOffset( 0 )] private readonly ulong padding0 = 0x0000000000000000;
+        [FieldOffset( 8 )] private readonly ulong padding1 = 0x0000000000000000;
+        [FieldOffset( 16 )] private readonly ulong padding2 = 0x0000000000000000;
 
         [FieldOffset( 24 )]
-        public ulong ulAtomic;
+        public ulong ulAtomic = 0x0000000000000000;
         [FieldOffset( 24 )]
-        public long lAtomic;
+        public long lAtomic = 0x0000000000000000;
 
-        [FieldOffset( 32 )] private readonly ulong padding3;
-        [FieldOffset( 40 )] private readonly ulong padding4;
-        [FieldOffset( 48 )] private readonly ulong padding5;
-        [FieldOffset( 56 )] private readonly ulong padding6;
+        [FieldOffset( 32 )] private readonly ulong padding3 = 0x0000000000000000;
+        [FieldOffset( 40 )] private readonly ulong padding4 = 0x0000000000000000;
+        [FieldOffset( 48 )] private readonly ulong padding5 = 0x0000000000000000;
+        [FieldOffset( 56 )] private readonly ulong padding6 = 0x0000000000000000;
     }
 
 
